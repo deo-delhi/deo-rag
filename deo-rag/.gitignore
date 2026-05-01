@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+vectorstore/
+*.log
+
+# Graphify local-only outputs
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json

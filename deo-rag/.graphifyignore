@@ -1,0 +1,32 @@
+# Dependency directories
+node_modules/
+.venv/
+venv/
+__pycache__/
+
+# Build and cache outputs
+dist/
+build/
+.vite/
+.pytest_cache/
+*.pyc
+*.log
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+vectorstore/
+uploads/
+
+# Graphify/Cursor generated guidance should not be extracted as project knowledge
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursor/
+.codex/
+.gemini/
+.opencode/
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json

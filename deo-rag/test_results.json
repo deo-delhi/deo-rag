@@ -1,0 +1,10 @@
+{
+  "timestamp": null,
+  "summary": {
+    "note": "Previous regression results were cleared during the DEO RAG adaptation. Run python -m backend.test_regression after ingesting DEO records to regenerate this file.",
+    "total_tests": 0,
+    "successful_tests": 0,
+    "failed_tests": 0,
+    "metrics": {}
+  }
+}

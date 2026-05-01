@@ -1,0 +1,54 @@
+{
+  "test_cases": [
+    {
+      "question": "What lease conditions are described in the uploaded DEO records?",
+      "expected_keywords": ["lease", "condition", "record", "estate"],
+      "should_have_answer": true
+    },
+    {
+      "question": "Which parties or offices are mentioned in the estate file?",
+      "expected_keywords": ["office", "party", "estate", "record"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What dates or deadlines are present in the document?",
+      "expected_keywords": ["date", "deadline", "order", "notice"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What property or land details are available?",
+      "expected_keywords": ["property", "land", "area", "estate"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What correspondence or notices are referenced?",
+      "expected_keywords": ["notice", "letter", "correspondence", "reference"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What action is recommended or recorded by the office?",
+      "expected_keywords": ["action", "office", "record", "recommended"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What file references or case identifiers appear?",
+      "expected_keywords": ["file", "case", "reference", "number"],
+      "should_have_answer": true
+    },
+    {
+      "question": "Summarise the dispute or issue described in the records.",
+      "expected_keywords": ["dispute", "issue", "record", "summary"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What supporting documents are cited by the source record?",
+      "expected_keywords": ["document", "cited", "record", "source"],
+      "should_have_answer": true
+    },
+    {
+      "question": "What conclusion can be drawn only from the uploaded DEO documents?",
+      "expected_keywords": ["conclusion", "uploaded", "DEO", "document"],
+      "should_have_answer": true
+    }
+  ]
+}

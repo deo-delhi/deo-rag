@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: deo_pgvector
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: deorag
+    ports:
+      - "5202:5432"
+    volumes:
+      - ./vectorstore:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: deo_rag_backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://admin:admin123@postgres:5432/deorag
+    ports:
+      - "5200:5200"
+    depends_on:
+      - postgres
