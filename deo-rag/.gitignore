@@ -11,3 +11,5 @@ vectorstore/
 graphify-out/cache/
 graphify-out/manifest.json
 graphify-out/cost.json
+
+.run-logs/
