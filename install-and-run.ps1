@@ -259,10 +259,123 @@ function Stop-PreviousStack {
     }
 }
 
+# ---------- reboot + resume helpers ----------
+# Docker Desktop's first-time install enables WSL2 / VirtualMachinePlatform /
+# Hyper-V Windows features. Those features only activate after a system reboot,
+# so the very first 'docker info' on a fresh machine ALWAYS fails with
+# "The system cannot find the file specified" against npipe:////./pipe/docker_engine.
+# We detect that case, schedule the installer to relaunch at the next logon
+# via a Task Scheduler ONLOGON task running elevated, and reboot automatically.
+
+$script:ResumeTaskName = "DEO-RAG-Installer-Resume"
+$script:StateDir       = Join-Path $env:ProgramData "DEO-RAG-Installer"
+$script:StateFile      = Join-Path $script:StateDir "state.json"
+$script:ResumeBatPath  = $null   # set in main once $ScriptRoot is known
+
+function Get-InstallState {
+    if (Test-Path $script:StateFile) {
+        try {
+            $raw = Get-Content -Path $script:StateFile -Raw -Encoding UTF8 -ErrorAction Stop
+            if ($raw) { return ($raw | ConvertFrom-Json) }
+        } catch {}
+    }
+    return [pscustomobject]@{
+        reboot_count                     = 0
+        docker_post_install_reboot_done  = $false
+    }
+}
+
+function Set-InstallState {
+    param($State)
+    if (-not (Test-Path $script:StateDir)) {
+        New-Item -ItemType Directory -Force -Path $script:StateDir | Out-Null
+    }
+    ($State | ConvertTo-Json -Depth 5) | Set-Content -Path $script:StateFile -Encoding UTF8
+}
+
+function Test-PendingReboot {
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootInProgress",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\PackagesPending",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
+    )
+    foreach ($p in $paths) { if (Test-Path $p) { return $true } }
+    try {
+        $sm = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" `
+            -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+        if ($sm -and $sm.PendingFileRenameOperations) { return $true }
+    } catch {}
+    return $false
+}
+
+function Register-ResumeAfterReboot {
+    if (-not $script:ResumeBatPath -or -not (Test-Path $script:ResumeBatPath)) {
+        Write-Warning "[reboot] Resume launcher not found at '$script:ResumeBatPath'. Auto-resume is disabled."
+        return $false
+    }
+    & schtasks.exe /Delete /F /TN $script:ResumeTaskName *> $null
+    $tr   = '"' + $env:ComSpec + '" /c """' + $script:ResumeBatPath + '"""'
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    & schtasks.exe /Create /F /TN $script:ResumeTaskName /TR $tr /SC ONLOGON /RU $user /RL HIGHEST /IT *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[reboot] Auto-resume task '$script:ResumeTaskName' will fire at next logon."
+        return $true
+    }
+    Write-Warning "[reboot] Could not register resume task (schtasks exit $LASTEXITCODE). You will need to re-run install-and-run.bat manually after reboot."
+    return $false
+}
+
+function Unregister-ResumeAfterReboot {
+    & schtasks.exe /Delete /F /TN $script:ResumeTaskName *> $null
+}
+
+function Invoke-RebootAndResume {
+    param(
+        [int]    $DelaySeconds = 30,
+        [string] $Reason       = "DEO RAG installer: rebooting to finish Docker Desktop / WSL2 setup."
+    )
+    Register-ResumeAfterReboot | Out-Null
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host "  REBOOT REQUIRED" -ForegroundColor Yellow
+    Write-Host "  Reason : $Reason"
+    Write-Host "  Action : Windows will restart in $DelaySeconds seconds." -ForegroundColor Yellow
+    Write-Host "  After login, the installer continues automatically."
+    Write-Host "  To cancel the restart now, open a terminal and run:  shutdown /a" -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Start-Sleep -Seconds 5
+    & shutdown.exe /r /t $DelaySeconds /c $Reason | Out-Null
+    Pop-Location -ErrorAction SilentlyContinue
+    exit 0
+}
+
+function Install-Wsl2IfNeeded {
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) {
+        Write-Host "[wsl] wsl.exe not found - Docker Desktop installer will pull WSL2 components."
+        return
+    }
+    & wsl.exe --status *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[wsl] WSL2 already installed."
+        return
+    }
+    Write-Host "[wsl] Installing WSL2 (no distribution; required for Docker Desktop) ..."
+    & wsl.exe --install --no-distribution *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[wsl] 'wsl --install' returned exit $LASTEXITCODE; Docker Desktop may still need it."
+    }
+}
+
 # ---------- main ----------
 if (-not (Test-Administrator)) { throw "Run this script elevated (Run as Administrator)." }
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:ResumeBatPath = Join-Path $ScriptRoot "install-and-run.bat"
+$installState         = Get-InstallState
+
 Push-Location $ScriptRoot
 try {
     Disable-Avast
@@ -303,17 +416,60 @@ try {
     Install-WingetPackage -Id "OpenJS.NodeJS.LTS"            -Label "Node.js LTS"
     Install-WingetPackage -Id "Nvidia.CUDA"                  -Label "NVIDIA CUDA Toolkit"
     Install-WingetPackage -Id "Ollama.Ollama"                -Label "Ollama"
+
     if (-not $SkipDockerSetup) {
+        # Track whether Docker Desktop existed BEFORE we ran the installer, so we
+        # can tell a "fresh install" (which forces WSL2/HyperV feature activation
+        # and therefore needs a reboot before the engine can come up) apart from
+        # an upgrade / no-op install.
+        $ddExePath        = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
+        $ddWasPresent     = Test-Path $ddExePath
+        $pendingBefore    = Test-PendingReboot
+
+        Install-Wsl2IfNeeded
         Install-WingetPackage -Id "Docker.DockerDesktop" -Label "Docker Desktop"
+
+        $ddIsPresentNow   = Test-Path $ddExePath
+        $ddJustInstalled  = ($ddIsPresentNow -and -not $ddWasPresent)
+        $pendingAfter     = Test-PendingReboot
+
+        # If Docker Desktop was just installed, OR Windows reports a pending reboot
+        # (typically because WSL2 / VirtualMachinePlatform / Hyper-V was just turned
+        # on), reboot now and resume automatically. Without this, the next call to
+        # 'docker info' fails with:
+        #   "open //./pipe/docker_engine: The system cannot find the file specified."
+        # which is exactly the error you hit on a fresh machine.
+        if (($ddJustInstalled -or $pendingAfter -or (-not $pendingBefore -and $pendingAfter)) `
+            -and -not $installState.docker_post_install_reboot_done) {
+            $installState.docker_post_install_reboot_done = $true
+            $installState.reboot_count = ([int]$installState.reboot_count) + 1
+            Set-InstallState $installState
+
+            $why = if ($ddJustInstalled) {
+                "Docker Desktop was just installed; WSL2 / VirtualMachinePlatform features need a reboot to activate."
+            } else {
+                "Windows is reporting a pending reboot (likely from the WSL2 / Hyper-V feature install)."
+            }
+            Invoke-RebootAndResume -Reason $why
+        }
     }
     Refresh-EnvironmentPath
 
     # Docker engine
     if (-not $SkipDockerSetup) {
         Start-DockerDesktopIfNeeded
-        Write-Host "[docker] Waiting for daemon (first start can take a few minutes) ..."
+        Write-Host "[docker] Waiting for daemon (first start can take several minutes) ..."
         if (-not (Wait-DockerDaemon)) {
-            throw "Docker did not respond in time. Open Docker Desktop manually, wait until it finishes starting, then re-run this script."
+            # Defensive: should be rare since we already reboot pre-emptively above.
+            # If we still can't reach the engine and we haven't already used up our
+            # reboot budget, schedule one more auto-reboot + auto-resume.
+            if ([int]$installState.reboot_count -lt 2) {
+                $installState.reboot_count = ([int]$installState.reboot_count) + 1
+                Set-InstallState $installState
+                Write-Warning "[docker] Daemon still not responding. Auto-rebooting once more."
+                Invoke-RebootAndResume -Reason "Docker daemon did not respond after install + start. Rebooting to retry."
+            }
+            throw "Docker daemon did not start after $([int]$installState.reboot_count) automatic reboots. Open Docker Desktop manually, wait until the whale icon turns steady, then re-run install-and-run.bat."
         }
     } else {
         docker info | Out-Null
@@ -495,6 +651,11 @@ ALLOWED_ORIGIN_REGEX=
 
     Write-Host "`n[ui] Opening $FrontendUrl ..."
     Start-Process $FrontendUrl
+
+    # Successful end-to-end run: clear the resume-on-logon scheduled task and the
+    # state file so the next logon doesn't re-launch the installer.
+    Unregister-ResumeAfterReboot
+    Remove-Item -Path $script:StateFile -ErrorAction SilentlyContinue
 
     Write-Host ""
     Write-Host "Done."
