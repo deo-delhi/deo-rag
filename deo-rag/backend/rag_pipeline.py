@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 import logging
 
 from .config import SETTINGS
+from .torch_device import preferred_torch_device
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def get_embeddings():
 
         return HuggingFaceEmbeddings(
             model_name="BAAI/bge-small-en",
-            model_kwargs={"device": "cuda"},
+            model_kwargs={"device": preferred_torch_device()},
         )
 
     raise ValueError(

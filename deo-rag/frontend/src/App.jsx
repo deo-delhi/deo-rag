@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { id: 'ingest', label: 'Ingest' },
   { id: 'chat', label: 'Chat' },
   { id: 'settings', label: 'Settings' },
+  { id: 'hardware-placement', label: 'Hardware' },
 ];
 
 export default function App() {
@@ -75,6 +76,10 @@ export default function App() {
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
   const [activeSection, setActiveSection] = useState('overview');
+  const [hardwareProfile, setHardwareProfile] = useState(null);
+  const [hardwareLoading, setHardwareLoading] = useState(false);
+  const [hardwareRecalibrating, setHardwareRecalibrating] = useState(false);
+  const [hardwareUiMessage, setHardwareUiMessage] = useState('');
 
   const canAsk = useMemo(() => question.trim().length > 0 && !loading, [question, loading]);
   const canUpload = useMemo(() => selectedFiles.length > 0 && !uploading, [selectedFiles, uploading]);
@@ -156,6 +161,43 @@ export default function App() {
       setBackendHealth(response.ok ? 'online' : 'degraded');
     } catch {
       setBackendHealth('offline');
+    }
+  };
+
+  const refreshHardware = async () => {
+    setHardwareLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/hardware`);
+      if (!response.ok) {
+        throw new Error(`Hardware snapshot failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      setHardwareProfile(data);
+    } catch {
+      setHardwareProfile(null);
+    } finally {
+      setHardwareLoading(false);
+    }
+  };
+
+  const handleHardwareRecalibrate = async () => {
+    setHardwareRecalibrating(true);
+    setHardwareUiMessage('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/hardware/recalibrate`, { method: 'POST' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || `Recalibrate failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      setHardwareProfile(data);
+      setHardwareUiMessage('Hardware profile updated for this machine.');
+    } catch (err) {
+      setHardwareUiMessage(err.message || 'Recalibrate failed.');
+    } finally {
+      setHardwareRecalibrating(false);
     }
   };
 
@@ -469,6 +511,7 @@ export default function App() {
       await refreshBackendHealth();
       const initialKnowledgeBase = await refreshKnowledgeBases();
       await refreshSettings();
+      await refreshHardware();
       await refreshDocuments(initialKnowledgeBase);
       await fetchIngestStatus(initialKnowledgeBase);
     };
@@ -599,6 +642,7 @@ export default function App() {
     refreshBackendHealth();
     refreshKnowledgeBases();
     refreshSettings();
+    refreshHardware();
     refreshDocuments();
     fetchIngestStatus();
   };
@@ -1138,6 +1182,118 @@ export default function App() {
             <p className="muted">Loading settings...</p>
           )}
         </section>
+
+        <footer id="hardware-placement" className="hardware-footer panel panel-wide">
+          <div className="panel-header hardware-footer-header">
+            <div>
+              <p className="section-label">Hardware placement</p>
+              <h3>Accelerator calibration</h3>
+              <p className="subtitle tight">
+                Preferred order: NVIDIA CUDA → Intel PyTorch XPU (when installed) → CPU. Ollama chooses its own device;
+                this panel reflects detection plus the paths this app controls (Docling, HuggingFace embeddings, PaddleOCR).
+              </p>
+            </div>
+            <div className="hardware-footer-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={refreshHardware}
+                disabled={hardwareLoading || hardwareRecalibrating}
+              >
+                {hardwareLoading ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleHardwareRecalibrate}
+                disabled={hardwareRecalibrating || backendHealth !== 'online'}
+              >
+                {hardwareRecalibrating ? 'Recalibrating…' : 'Re-calibrate hardware'}
+              </button>
+            </div>
+          </div>
+
+          {hardwareUiMessage ? <div className="alert success hardware-banner">{hardwareUiMessage}</div> : null}
+
+          {!hardwareProfile && hardwareLoading ? (
+            <p className="muted">Loading hardware profile…</p>
+          ) : null}
+
+          {!hardwareProfile && !hardwareLoading ? (
+            <p className="muted">Hardware profile unavailable (is the backend running?).</p>
+          ) : null}
+
+          {hardwareProfile ? (
+            <div className="hardware-grid">
+              <div className="hardware-card">
+                <span className="section-label">Resolved usage</span>
+                <ul className="hardware-usage-list">
+                  {Object.entries(hardwareProfile.usage_summary || {}).map(([key, label]) => (
+                    <li key={key}>
+                      <span className="hardware-key">{key.replace(/_/g, ' ')}</span>
+                      <span className="hardware-val">{String(label)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="hardware-card">
+                <span className="section-label">Ollama snapshot</span>
+                <p className="hardware-ollama-summary">{hardwareProfile.ollama?.summary || '—'}</p>
+                <p className="helper-text">
+                  Endpoint: {hardwareProfile.app_providers?.ollama_base_url || '—'}
+                </p>
+              </div>
+
+              <div className="hardware-card span-2">
+                <span className="section-label">Detected GPUs</span>
+                <ul className="hardware-adapter-list">
+                  {(hardwareProfile.video_adapters || []).length === 0 ? (
+                    <li className="muted">No adapters reported (non-Windows host or probe skipped).</li>
+                  ) : (
+                    hardwareProfile.video_adapters.map((a) => (
+                      <li key={a.name}>
+                        <strong>{a.name}</strong>
+                        {a.adapter_ram_bytes ? (
+                          <span className="muted"> · dedicated VRAM ~{Math.round(a.adapter_ram_bytes / (1024 * 1024))} MiB</span>
+                        ) : (
+                          <span className="muted"> · integrated / shared system memory</span>
+                        )}
+                      </li>
+                    ))
+                  )}
+                </ul>
+                <div className="hardware-flags">
+                  <span className={`chip ${hardwareProfile.nvidia_pytorch_cuda_usable ? 'chip-ok' : ''}`}>
+                    NVIDIA PyTorch CUDA: {hardwareProfile.nvidia_pytorch_cuda_usable ? 'usable' : 'no'}
+                  </span>
+                  <span className={`chip ${hardwareProfile.pytorch_xpu_usable ? 'chip-ok' : ''}`}>
+                    PyTorch XPU: {hardwareProfile.pytorch_xpu_usable ? 'yes' : 'no'}
+                  </span>
+                  <span className="chip">
+                    Intel graphics: {hardwareProfile.intel_graphics_detected ? 'detected' : 'not listed'}
+                  </span>
+                </div>
+              </div>
+
+              {(hardwareProfile.notes || []).length ? (
+                <div className="hardware-card span-2">
+                  <span className="section-label">Notes</span>
+                  <ul className="hardware-notes">
+                    {hardwareProfile.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              <p className="hardware-meta muted span-2">
+                Calibrated at {hardwareProfile.calibrated_at || '—'} · Fallback chain:{' '}
+                {(hardwareProfile.fallback_chain_applied || []).join(' → ')}
+              </p>
+            </div>
+          ) : null}
+        </footer>
       </div>
     </main>
   );

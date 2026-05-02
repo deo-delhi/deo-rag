@@ -155,10 +155,12 @@ function Wait-OllamaServer {
 function Start-OllamaIfNeeded {
     try {
         Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2 | Out-Null
-        Write-Host "[ollama] Already responding on 11434."
-        return
+        Write-Host "[ollama] Already responding on 11434. Restarting to ensure NVIDIA GPU usage..."
+        Stop-Process -Name "ollama" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
     } catch {}
-    Write-Host "[ollama] Starting background service ..."
+    Write-Host "[ollama] Starting background service with CUDA_VISIBLE_DEVICES=0 ..."
+    $env:CUDA_VISIBLE_DEVICES = "0"
     Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
     if (-not (Wait-OllamaServer)) { throw "Ollama HTTP API did not start (localhost:11434)." }
 }
@@ -299,6 +301,7 @@ try {
     Install-WingetPackage -Id "Microsoft.VCRedist.2015+.x64" -Label "VC++ 2015-2022 Redistributable"
     Install-WingetPackage -Id "Python.Python.3.12"           -Label "Python 3.12"
     Install-WingetPackage -Id "OpenJS.NodeJS.LTS"            -Label "Node.js LTS"
+    Install-WingetPackage -Id "Nvidia.CUDA"                  -Label "NVIDIA CUDA Toolkit"
     Install-WingetPackage -Id "Ollama.Ollama"                -Label "Ollama"
     if (-not $SkipDockerSetup) {
         Install-WingetPackage -Id "Docker.DockerDesktop" -Label "Docker Desktop"
@@ -352,6 +355,10 @@ try {
     Invoke-Pip -PipArgs @("install", "--upgrade", "pip", "wheel", "setuptools")
     Write-Host "`n[python] Installing backend requirements (large download, several minutes) ..."
     Invoke-Pip -PipArgs @("install", "-r", (Join-Path $AppRoot "backend\requirements.txt"))
+    Write-Host "`n[python] Overriding with CUDA PyTorch and PaddlePaddle GPU versions ..."
+    & $script:VenvPython -m pip uninstall -y paddlepaddle 2>&1 | Out-Null
+    Invoke-Pip -PipArgs @("install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118")
+    Invoke-Pip -PipArgs @("install", "paddlepaddle-gpu")
 
     # .env
     $envPath = Join-Path $AppRoot ".env"
@@ -368,20 +375,20 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=mxbai-embed-large:latest
 
-INGEST_CHUNK_SIZE=800
-INGEST_CHUNK_OVERLAP=120
-RETRIEVER_TOP_K=5
+INGEST_CHUNK_SIZE=1000
+INGEST_CHUNK_OVERLAP=150
+RETRIEVER_TOP_K=6
 
 LLM_TEMPERATURE=0
 OLLAMA_NUM_CTX=8192
-OLLAMA_NUM_PREDICT=1024
+OLLAMA_NUM_PREDICT=2048
 OLLAMA_REQUEST_TIMEOUT_SECONDS=300
 ASK_TIMEOUT_SECONDS=300
 
 OPENAI_API_KEY=
 
 DATABASE_URL=postgresql+psycopg2://admin:admin123@localhost:5202/deorag
-COLLECTION_NAME=deo_docs
+COLLECTION_NAME=deo_docs_unflagged
 DOCUMENTS_DIR=../documents
 
 ALLOWED_ORIGINS=
@@ -436,11 +443,11 @@ ALLOWED_ORIGIN_REGEX=
         throw "Backend /health did not respond. Inspect $AppRoot\.run-logs\backend.log and re-run."
     }
 
-    Write-Host "`n[settings] Pushing UI defaults (llama3.2, top_k=5, num_predict=1024) ..."
+    Write-Host "`n[settings] Pushing UI defaults (llama3.2, top_k=6, num_predict=2048) ..."
     $settingsBody = @{
         llm_model          = "llama3.2:latest"
-        retriever_top_k    = 5
-        ollama_num_predict = 1024
+        retriever_top_k    = 6
+        ollama_num_predict = 2048
         ollama_num_ctx     = 8192
     } | ConvertTo-Json
     try {
@@ -478,8 +485,8 @@ ALLOWED_ORIGIN_REGEX=
         $ingestBody = @{
             knowledge_base     = $SampleLibrary
             replace_collection = $true
-            chunk_size         = 800
-            chunk_overlap      = 120
+            chunk_size         = 1000
+            chunk_overlap      = 150
         } | ConvertTo-Json
         Invoke-RestMethod -Method Post -Uri "$BackendBase/ingest/start" -Body $ingestBody `
             -ContentType "application/json" -TimeoutSec 120 | Out-Null

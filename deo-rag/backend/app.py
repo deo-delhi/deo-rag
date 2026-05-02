@@ -61,6 +61,15 @@ def _map_llm_error(exc: Exception) -> HTTPException | None:
 
 
 app = FastAPI(title="DEO RAG API", version="0.1.0")
+
+
+@app.on_event("startup")
+def _initialize_hardware_placement() -> None:
+    from .hardware_calibration import initialize_hardware_profile
+
+    initialize_hardware_profile()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(SETTINGS.allowed_origins),
@@ -632,6 +641,22 @@ def clear_data(request: ClearDataRequest) -> dict:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/hardware")
+def hardware_snapshot() -> dict:
+    from .hardware_calibration import get_active_profile, initialize_hardware_profile, profile_for_api
+
+    if get_active_profile() is None:
+        initialize_hardware_profile()
+    return profile_for_api()
+
+
+@app.post("/hardware/recalibrate")
+def hardware_recalibrate() -> dict:
+    from .hardware_calibration import recalibrate
+
+    return recalibrate()
 
 
 @app.get("/documents")

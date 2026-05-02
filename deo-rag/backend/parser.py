@@ -7,6 +7,8 @@ import tempfile
 
 from langchain_core.documents import Document
 
+from .torch_device import docling_accelerator_device, paddleocr_use_gpu_preferred
+
 
 @dataclass
 class ParsedDocument:
@@ -15,9 +17,20 @@ class ParsedDocument:
 
 
 def _parse_with_docling(file_path: Path) -> str:
-    from docling.document_converter import DocumentConverter
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.accelerator_options import AcceleratorOptions
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import ThreadedPdfPipelineOptions
 
-    converter = DocumentConverter()
+    device = docling_accelerator_device()
+    pipeline_options = ThreadedPdfPipelineOptions(
+        accelerator_options=AcceleratorOptions(device=device),
+    )
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        },
+    )
     result = converter.convert(str(file_path))
     return result.document.export_to_markdown()
 
@@ -66,8 +79,10 @@ def ensure_searchable_pdf(
     try:
         import fitz
         from paddleocr import PaddleOCR
+        import paddle
 
-        ocr = PaddleOCR(use_angle_cls=True, lang="en")
+        use_gpu = paddleocr_use_gpu_preferred()
+        ocr = PaddleOCR(use_angle_cls=True, lang="en", use_gpu=use_gpu)
         with fitz.open(source_path) as doc:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 for page_number, page in enumerate(doc, start=1):
