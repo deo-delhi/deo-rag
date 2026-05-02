@@ -56,8 +56,8 @@ export default function App() {
   const [ingesting, setIngesting] = useState(false);
   const [ingestStatus, setIngestStatus] = useState(null);
   const [ingestError, setIngestError] = useState('');
-  const [chunkSize, setChunkSize] = useState(800);
-  const [chunkOverlap, setChunkOverlap] = useState(120);
+  const [chunkSize, setChunkSize] = useState(1000);
+  const [chunkOverlap, setChunkOverlap] = useState(150);
   const [replaceCollection, setReplaceCollection] = useState(false);
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') {
