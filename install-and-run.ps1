@@ -119,12 +119,76 @@ function Find-AppRoots {
     throw "Cannot locate docker-compose.yml. Place this script next to (or inside) the deo-rag app folder."
 }
 
+# winget exit codes that mean "package is fine; nothing to do" (these are NOT errors).
+# Source: https://learn.microsoft.com/windows/package-manager/winget/returnCodes
+$script:WingetBenignExitCodes = @(
+    0,
+    -1978335189,  # APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE  (no newer version)
+    -1978335212,  # APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND  (already there)
+    -1978335215,  # APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
+    -1978335135   # APPINSTALLER_CLI_ERROR_INSTALL_PACKAGE_IN_USE_BY_APPLICATION (rare; usually fine after retry)
+)
+
+# Run a native exe and never let its stderr crash the script. Returns the exit code.
+# This is the workaround for the long-standing PowerShell 5.1 quirk where a
+# native command writing to stderr is wrapped as a NativeCommandError that, under
+# $ErrorActionPreference = 'Stop', terminates the whole script even when the
+# command itself succeeded or the situation is recoverable.
+function Invoke-NativeSafe {
+    param(
+        [Parameter(Mandatory)] [string]   $File,
+        [string[]]                         $Arguments = @(),
+        [switch]                           $ShowOutput
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($ShowOutput) {
+            & $File @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        } else {
+            & $File @Arguments *>&1 | Out-Null
+        }
+        return $LASTEXITCODE
+    } catch {
+        Write-Host "  [native] $File raised: $($_.Exception.Message)" -ForegroundColor DarkGray
+        return -1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+function Test-WingetPackageInstalled {
+    param([string]$Id)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & winget list --id $Id --exact --source winget 2>&1 | Out-String
+        return ($output -match [regex]::Escape($Id))
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Install-WingetPackage {
     param([string]$Id, [string]$Label)
     Write-Host "  [winget] Ensuring $Label ($Id) ..."
-    & winget install -e --id $Id --source winget --accept-package-agreements --accept-source-agreements --silent
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "  [winget] $Id returned exit $LASTEXITCODE (likely already installed)."
+    if (Test-WingetPackageInstalled -Id $Id) {
+        Write-Host "  [winget] $Label already installed - skipping."
+        Refresh-EnvironmentPath
+        return
+    }
+    $code = Invoke-NativeSafe -ShowOutput -File "winget" -Arguments @(
+        "install", "-e", "--id", $Id, "--source", "winget",
+        "--accept-package-agreements", "--accept-source-agreements", "--silent"
+    )
+    if ($code -eq 0) {
+        Write-Host "  [winget] $Label installed."
+    } elseif ($script:WingetBenignExitCodes -contains $code -or (Test-WingetPackageInstalled -Id $Id)) {
+        Write-Host "  [winget] $Label already present (winget exit $code) - continuing."
+    } else {
+        Write-Warning "  [winget] $Label install exited $code. Continuing; the next step will surface it if it's actually missing."
     }
     Refresh-EnvironmentPath
 }
@@ -165,9 +229,13 @@ function Start-OllamaIfNeeded {
     if (-not (Wait-OllamaServer)) { throw "Ollama HTTP API did not start (localhost:11434)." }
 }
 
+function Test-DockerEngineUp {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+    return ((Invoke-NativeSafe -File "docker" -Arguments @("info")) -eq 0)
+}
+
 function Start-DockerDesktopIfNeeded {
-    docker info 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    if (Test-DockerEngineUp) {
         Write-Host "[docker] Engine already up."
         return
     }
@@ -177,19 +245,20 @@ function Start-DockerDesktopIfNeeded {
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($dd) {
         Write-Host "[docker] Launching Docker Desktop ..."
-        Start-Process -FilePath $dd -ErrorAction SilentlyContinue | Out-Null
+        try { Start-Process -FilePath $dd -ErrorAction SilentlyContinue | Out-Null } catch {
+            Write-Warning "[docker] Could not launch Docker Desktop: $($_.Exception.Message)"
+        }
     } else {
-        Write-Warning "[docker] Docker Desktop.exe not found in default install location."
+        Write-Warning "[docker] Docker Desktop.exe not found in the default install location."
     }
 }
 
 function Wait-DockerDaemon {
     $deadline = (Get-Date).AddMinutes(10)
     while ((Get-Date) -lt $deadline) {
-        docker info 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            docker compose version 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { return $true }
+        if (Test-DockerEngineUp) {
+            $compose = Invoke-NativeSafe -File "docker" -Arguments @("compose", "version")
+            if ($compose -eq 0) { return $true }
         }
         Start-Sleep -Seconds 5
     }
@@ -351,21 +420,34 @@ function Invoke-RebootAndResume {
     exit 0
 }
 
+function Test-Wsl2Installed {
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $false }
+    # cmd.exe owns the redirection, so its child process never streams stderr
+    # back to PowerShell. This is what makes the check safe even when WSL is
+    # missing and writes "The Windows Subsystem for Linux is not installed."
+    $null = & cmd.exe /c "wsl --status >nul 2>&1"
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Install-Wsl2IfNeeded {
-    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
-    if (-not $wsl) {
-        Write-Host "[wsl] wsl.exe not found - Docker Desktop installer will pull WSL2 components."
-        return
-    }
-    & wsl.exe --status *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[wsl] WSL2 already installed."
-        return
-    }
-    Write-Host "[wsl] Installing WSL2 (no distribution; required for Docker Desktop) ..."
-    & wsl.exe --install --no-distribution *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "[wsl] 'wsl --install' returned exit $LASTEXITCODE; Docker Desktop may still need it."
+    try {
+        if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+            Write-Host "[wsl] wsl.exe not on PATH yet - Docker Desktop installer will pull WSL2 components and a reboot will follow."
+            return
+        }
+        if (Test-Wsl2Installed) {
+            Write-Host "[wsl] WSL2 already installed."
+            return
+        }
+        Write-Host "[wsl] Installing WSL2 (no distribution; required for Docker Desktop) ..."
+        $null = & cmd.exe /c "wsl --install --no-distribution >nul 2>&1"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "[wsl] 'wsl --install' returned exit $LASTEXITCODE - Docker Desktop will pull / activate WSL2 itself; the auto-reboot below will finish the job."
+        } else {
+            Write-Host "[wsl] WSL2 install requested - a reboot will activate it."
+        }
+    } catch {
+        Write-Warning "[wsl] WSL2 setup skipped: $($_.Exception.Message). Docker Desktop will handle WSL2 itself."
     }
 }
 
@@ -662,6 +744,26 @@ ALLOWED_ORIGIN_REGEX=
     Write-Host "  Frontend : $FrontendUrl"
     Write-Host "  Backend  : $BackendBase/docs"
     Write-Host "  Stop     : $AppRoot\stop.ps1"
+}
+catch {
+    $msg = $_.Exception.Message
+    $where = ""
+    if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+        $where = $_.InvocationInfo.PositionMessage
+    }
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Red
+    Write-Host "  Installer error" -ForegroundColor Red
+    Write-Host "  $msg" -ForegroundColor Red
+    if ($where) { Write-Host $where -ForegroundColor DarkGray }
+    Write-Host "============================================================" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "What to do next:" -ForegroundColor Yellow
+    Write-Host "  1. Read the message above. Most failures here are environmental (network, antivirus, missing reboot)." -ForegroundColor Yellow
+    Write-Host "  2. If Docker / WSL2 looks involved, just re-run install-and-run.bat - the script is idempotent and will pick up where it stopped." -ForegroundColor Yellow
+    Write-Host "  3. Backend / frontend logs (if the stack already started): $AppRoot\.run-logs\backend.log  and  frontend.log" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
 }
 finally {
     Pop-Location
