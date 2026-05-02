@@ -34,11 +34,18 @@ function Require-Command([string]$Name) {
     }
 }
 
-function Test-PortFree([int]$Port, [string]$Label) {
-    $hit = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
-    if ($hit) {
-        Write-Error "$Label port $Port is already in use. Stop the existing process first."
-        exit 1
+function Ensure-PortsFree() {
+    $ports = @([int]$BackendPort, [int]$FrontendPort, [int]$PostgresPort)
+    $inUse = $false
+    foreach ($p in $ports) {
+        if (Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue) {
+            $inUse = $true
+        }
+    }
+    if ($inUse) {
+        Write-Host "`nDEO-RAG is already running. Automatically stopping the previous instance...`n" -ForegroundColor Cyan
+        & (Join-Path $RootDir "stop.ps1")
+        Start-Sleep -Seconds 3
     }
 }
 
@@ -88,9 +95,7 @@ if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-Test-PortFree -Port ([int]$BackendPort)  -Label "Backend"
-Test-PortFree -Port ([int]$FrontendPort) -Label "Frontend"
-Test-PortFree -Port ([int]$PostgresPort) -Label "PostgreSQL"
+Ensure-PortsFree
 
 Write-Host "Starting PostgreSQL + pgvector via docker compose..."
 docker compose -f $ComposeFile up -d postgres | Out-Null
