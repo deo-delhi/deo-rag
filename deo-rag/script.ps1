@@ -70,8 +70,25 @@ if (-not (Test-Path (Join-Path $RootDir ".env"))) {
 
 # Pull the Ollama model automatically
 if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
-    Write-Host "Pulling the latest llama3.2 model in Ollama (this may take a while if not cached)..."
-    ollama pull llama3.2:latest
+    $TargetModel = "llama3.2:latest"
+    if (Test-Path (Join-Path $LogDir "runtime_settings.json")) {
+        try {
+            $settings = Get-Content (Join-Path $LogDir "runtime_settings.json") | ConvertFrom-Json
+            if ($settings.runtime_settings.llm_model) {
+                $TargetModel = $settings.runtime_settings.llm_model
+            }
+        } catch {}
+    } 
+    
+    if ($TargetModel -eq "llama3.2:latest" -and (Test-Path (Join-Path $RootDir ".env"))) {
+        $envMatch = Select-String -Path (Join-Path $RootDir ".env") -Pattern "^LLM_MODEL=(.+)"
+        if ($envMatch) {
+            $TargetModel = $envMatch.Matches.Groups[1].Value.Trim()
+        }
+    }
+
+    Write-Host "Pulling the model ($TargetModel) in Ollama (this may take a while if not cached)..."
+    ollama pull $TargetModel
 } else {
     Write-Host "Ollama is not installed or not in PATH, skipping model pull."
 }
