@@ -5,6 +5,7 @@ from threading import Lock, Thread
 import re
 import uuid
 import shutil
+import json
 
 from fastapi import FastAPI, File, HTTPException, Query as FastAPIQuery, UploadFile
 from fastapi.responses import FileResponse
@@ -17,7 +18,6 @@ from .config import SETTINGS
 from .ingest import ingest_to_dict
 from .rag_pipeline import (
     get_vectorstore,
-    debug_retrieve,
     debug_retrieve_with_threshold,
     debug_mmr_retrieve,
     generate_fallback_answer_from_docs,
@@ -96,6 +96,36 @@ documents_root_dir.mkdir(parents=True, exist_ok=True)
 DEFAULT_KNOWLEDGE_BASE = "unflagged"
 LEGACY_DEFAULT_KNOWLEDGE_BASE = "default"
 active_knowledge_base = DEFAULT_KNOWLEDGE_BASE
+
+SETTINGS_FILE = (Path(__file__).resolve().parent.parent / ".run-logs" / "runtime_settings.json").resolve()
+
+def load_persisted_settings():
+    global active_knowledge_base
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                data = json.load(f)
+                if "active_knowledge_base" in data:
+                    active_knowledge_base = data["active_knowledge_base"]
+                if "runtime_settings" in data:
+                    for k, v in data["runtime_settings"].items():
+                        if k in runtime_settings:
+                            runtime_settings[k] = v
+        except Exception:
+            pass
+
+def save_persisted_settings():
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump({
+                "active_knowledge_base": active_knowledge_base,
+                "runtime_settings": runtime_settings
+            }, f)
+    except Exception:
+        pass
+
+load_persisted_settings()
 
 ingest_lock = Lock()
 ingest_states: dict[str, dict] = {}
@@ -211,6 +241,19 @@ def _shutdown_executor() -> None:
     ask_executor.shutdown(wait=False, cancel_futures=True)
 
 
+_ABSTAIN_PHRASES = (
+    "the document does not contain this information.",
+    "insufficient evidence in the provided documents to answer this question.",
+    "insufficient evidence in the active library for this document.",
+)
+
+
+def _is_abstain_answer(answer: str) -> bool:
+    if not isinstance(answer, str):
+        return False
+    return answer.strip().lower() in _ABSTAIN_PHRASES
+
+
 def _looks_incomplete_answer(question: str, answer: str) -> bool:
     """
     Detect if an answer appears to be incomplete or truncated.
@@ -235,6 +278,10 @@ def _looks_incomplete_answer(question: str, answer: str) -> bool:
     cleaned = answer.strip()
     if cleaned == "":
         return True
+
+    # Honest abstentions are not "incomplete"; do not regenerate them.
+    if _is_abstain_answer(cleaned):
+        return False
 
     # Check for common leakage from instruction-heavy prompts
     leaked_labels = ("**STRUCTURED**", "FACT/SHORT", "DESCRIPTIVE", "Mode", "**Classification**")
@@ -323,6 +370,66 @@ def _source_url(library: str, filename: str, *, searchable: bool = True) -> str:
     return f"/sources/{quote(library)}/{quote(filename)}{suffix}"
 
 
+_SOURCE_MATCH_STOPWORDS = {
+    "and",
+    "anr",
+    "anrs",
+    "etc",
+    "ors",
+    "others",
+    "the",
+    "versus",
+    "vs",
+}
+
+_SOURCE_MATCH_COMMON_TOKENS = {
+    "government",
+    "india",
+    "state",
+    "union",
+}
+
+
+def _title_tokens(value: str) -> set[str]:
+    normalized = value.lower().replace("&", " and ")
+    normalized = re.sub(r"\.(pdf|PDF)$", "", normalized)
+    normalized = normalized.replace("uoi", " union india ")
+    normalized = normalized.replace("goi", " government india ")
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) > 2 and token not in _SOURCE_MATCH_STOPWORDS
+    }
+
+
+def _matching_sources_for_question(question: str, library: str) -> list[str]:
+    query_tokens = _title_tokens(question)
+    if len(query_tokens) < 2:
+        return []
+
+    matches: list[tuple[float, str]] = []
+    for pdf in _knowledge_base_dir(library, create=True).glob("*.pdf"):
+        source_tokens = _title_tokens(pdf.stem)
+        if not source_tokens:
+            continue
+
+        overlap = source_tokens & query_tokens
+        if len(overlap) < 2:
+            continue
+        if not (overlap - _SOURCE_MATCH_COMMON_TOKENS):
+            continue
+
+        coverage = len(overlap) / len(source_tokens)
+        query_coverage = len(overlap) / len(query_tokens)
+        # Document-name intent: two or more distinctive title words are present
+        # and they account for a meaningful part of either the title or the query.
+        if coverage >= 0.25 or query_coverage >= 0.4:
+            matches.append((max(coverage, query_coverage), pdf.name))
+
+    matches.sort(reverse=True)
+    return [name for _score, name in matches[:2]]
+
+
 def _snippet(text: str, limit: int = 260) -> str:
     compact = " ".join((text or "").split())
     if len(compact) <= limit:
@@ -345,17 +452,32 @@ def _enrich_doc_metadata(doc, *, library: str, score: float | None = None) -> No
 
 
 def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[object, float]]:
+    from .hybrid_retrieval import hybrid_retrieve
+
     retrieved: list[tuple[object, float]] = []
     top_k = runtime_settings["retriever_top_k"]
 
     for library in libraries:
         collection_name = _knowledge_base_collection_name(library)
+        matched_sources = _matching_sources_for_question(question, library)
         try:
-            docs_with_scores = retrieve_with_scores(
-                question,
-                top_k=top_k,
-                collection_name=collection_name,
-            )
+            if matched_sources:
+                docs_with_scores = []
+                for source in matched_sources:
+                    docs_with_scores.extend(
+                        hybrid_retrieve(
+                            question,
+                            collection_name=collection_name,
+                            top_k=max(top_k, 6),
+                            metadata_filter={"source": source},
+                        )
+                    )
+            else:
+                docs_with_scores = hybrid_retrieve(
+                    question,
+                    collection_name=collection_name,
+                    top_k=max(top_k, 6),
+                )
         except Exception:
             continue
 
@@ -496,6 +618,7 @@ def set_active_knowledge_base(request: KnowledgeBaseRequest) -> dict:
     _knowledge_base_dir(knowledge_base, create=True)
     active_knowledge_base = knowledge_base
     _get_ingest_state(knowledge_base)
+    save_persisted_settings()
     return {
         "status": "active_updated",
         "active_knowledge_base": active_knowledge_base,
@@ -547,6 +670,8 @@ def delete_knowledge_base(knowledge_base_name: str) -> dict:
     if active_knowledge_base.strip() == knowledge_base:
         active_knowledge_base = DEFAULT_KNOWLEDGE_BASE
 
+    save_persisted_settings()
+
     return {
         "status": "deleted",
         "knowledge_base": knowledge_base,
@@ -584,6 +709,7 @@ def update_settings(request: SettingsUpdateRequest) -> dict:
         raise HTTPException(status_code=400, detail="ollama_num_predict must be > 0")
 
     runtime_settings.update(updates)
+    save_persisted_settings()
 
     return {"status": "updated", "settings": get_settings()}
 
@@ -779,6 +905,12 @@ def _run_ingest_job(
             )
             state["status"] = "completed"
             state["result"] = result
+            try:
+                from .hybrid_retrieval import invalidate_collection
+
+                invalidate_collection(target_collection_name)
+            except Exception:
+                pass
         except Exception as exc:
             state["status"] = "failed"
             state["error"] = str(exc)
@@ -874,7 +1006,25 @@ def ask(query: Query) -> dict:
         "answer_length": 0,
         "retrieved_count": 0,
         "top_similarity_score": None,
+        "matched_sources": [],
+        "abstained_no_matching_chunks": False,
     }
+
+    # If the question clearly names a document but no chunks from any of the
+    # named documents are reachable in this scope, abstain immediately. This
+    # is the single biggest cause of confident-but-wrong summaries: the LLM
+    # is forced to "answer" from chunks of unrelated cases.
+    if query_scope == "active":
+        matched_sources_for_abstention = _matching_sources_for_question(
+            query.question, knowledge_base
+        )
+    else:
+        matched_sources_for_abstention = []
+        for lib in target_libraries:
+            matched_sources_for_abstention.extend(
+                _matching_sources_for_question(query.question, lib)
+            )
+    debug_flags["matched_sources"] = sorted(set(matched_sources_for_abstention))
 
     try:
         docs_with_scores = _retrieve_for_libraries(query.question, target_libraries)
@@ -882,6 +1032,35 @@ def ask(query: Query) -> dict:
         debug_flags["retrieved_count"] = len(source_documents)
         if docs_with_scores:
             debug_flags["top_similarity_score"] = round(float(docs_with_scores[0][1]), 4)
+
+        if matched_sources_for_abstention:
+            wanted = set(matched_sources_for_abstention)
+            keep = [
+                (doc, score)
+                for doc, score in docs_with_scores
+                if (doc.metadata or {}).get("source") in wanted
+            ]
+            if not keep:
+                debug_flags["abstained_no_matching_chunks"] = True
+                abstain_msg = (
+                    "Insufficient evidence in the provided documents to answer this question. "
+                    "I detected that you named one of these documents: "
+                    f"{', '.join(sorted(wanted))}, but no indexed chunks from "
+                    "those documents were retrieved. Re-ingest the active library and try again."
+                )
+                return {
+                    "knowledge_base": knowledge_base,
+                    "data_library": knowledge_base,
+                    "query_scope": query_scope,
+                    "searched_libraries": target_libraries,
+                    "collection_name": target_collection_name,
+                    "answer": abstain_msg,
+                    "sources": [],
+                    "debug": debug_flags,
+                }
+            docs_with_scores = keep
+            source_documents = [doc for doc, _ in keep]
+            debug_flags["retrieved_count"] = len(source_documents)
 
         future = ask_executor.submit(
             generate_fallback_answer_from_docs,
@@ -912,7 +1091,7 @@ def ask(query: Query) -> dict:
     # answer directly from retrieved chunks using a simpler prompt.
     if (
         isinstance(answer, str)
-        and answer.strip() == "The document does not contain this information."
+        and answer.strip().lower() == "the document does not contain this information."
         and source_documents
     ):
         try:
@@ -951,11 +1130,15 @@ def ask(query: Query) -> dict:
                 raise mapped from exc
             # Keep the original answer if regeneration fails for other reasons.
 
-    # Final rescue: when sources exist, avoid false no-information responses.
+    # Final rescue: when sources exist and the model used the legacy abstain
+    # phrase, build an extractive best-effort answer. We deliberately do NOT
+    # rescue the new "Insufficient evidence ..." phrase — that is an honest
+    # abstention from the strict grounding prompt and stitching unrelated
+    # sentences only re-introduces hallucinations.
     if (
         source_documents
         and isinstance(answer, str)
-        and answer.strip() == "The document does not contain this information."
+        and answer.strip().lower() == "the document does not contain this information."
     ):
         answer = _extractive_rescue_answer(query.question, source_documents)
         debug_flags["used_rescue"] = True
@@ -983,14 +1166,23 @@ def debug_retrieve_endpoint(query: Query) -> dict:
         raise HTTPException(status_code=400, detail="question must not be empty")
     
     knowledge_base = _resolve_knowledge_base_name(query.knowledge_base)
-    results = debug_retrieve(
-        query.question,
-        include_scores=True,
-        collection_name=_knowledge_base_collection_name(knowledge_base),
-    )
+    docs_with_scores = _retrieve_for_libraries(query.question, [knowledge_base])
+    results = [
+        {
+            "rank": i + 1,
+            "similarity_score": round(float(score), 4),
+            "source": doc.metadata.get("source", "unknown"),
+            "page": doc.metadata.get("page", "N/A"),
+            "content_preview": doc.page_content[:500],
+            "content_full": doc.page_content,
+            "metadata": dict(doc.metadata),
+        }
+        for i, (doc, score) in enumerate(docs_with_scores)
+    ]
     return {
         "knowledge_base": knowledge_base,
         "query": query.question,
+        "matched_sources": _matching_sources_for_question(query.question, knowledge_base),
         "retrieved_count": len(results),
         "documents": results,
     }

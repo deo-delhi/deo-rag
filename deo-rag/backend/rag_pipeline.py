@@ -153,22 +153,24 @@ def build_qa_chain(
 
 
 FALLBACK_ANSWER_PROMPT = PromptTemplate(
-    template="""You are a Defence Estates Organisation records assistant answering from retrieved context only.
+    template="""You are a Defence Estates Organisation records assistant. You answer ONLY from the snippets between <CONTEXT> and </CONTEXT>.
 
-Rules:
-- Use only the context below.
-- If context contains relevant evidence, provide a complete answer.
-- When sources are present but evidence is partial, provide the closest supported answer and state uncertainties briefly.
-- Do not provide legal, financial, title, or administrative conclusions unless the context directly supports them.
-- Do not output labels such as STRUCTURED, FACT/SHORT, DESCRIPTIVE, or Mode.
-- Use short section headers only when needed.
-- Only reply exactly "The document does not contain this information." when context is completely unrelated.
+Hard rules - follow exactly:
+1. Each snippet is labelled `[snippet N] source: <filename> | page: <P>`. Treat that filename as the document the snippet belongs to.
+2. If the user names or clearly refers to a specific document, use ONLY snippets whose `source` matches that document. Ignore all other snippets, even if they look similar.
+3. Never use prior knowledge of cases, parties, dates, statutes, citations, or rulings. Do not infer, paraphrase loosely, or "fill in" anything that is not literally written in the snippets you are using.
+4. Quote facts directly from the snippets. If two snippets disagree, state the disagreement and quote both.
+5. If the snippets do not contain enough evidence to answer the question, reply exactly:
+   Insufficient evidence in the provided documents to answer this question.
+   Do not guess.
+6. End the answer with a `Sources:` line listing each cited document as `<filename> (page <P>)`. Only list documents you actually used.
+7. Plain text. No filler. No labels such as STRUCTURED, FACT/SHORT, DESCRIPTIVE, or Mode.
 
-Context:
+<CONTEXT>
 {context}
+</CONTEXT>
 
-Question:
-{question}
+Question: {question}
 
 Answer:""",
     input_variables=["context", "question"],
@@ -198,7 +200,9 @@ def generate_fallback_answer_from_docs(
     for i, doc in enumerate(docs[:6], start=1):
         source = doc.metadata.get("source", "unknown")
         page = doc.metadata.get("page", "N/A")
-        context_parts.append(f"[Chunk {i} | source={source} | page={page}]\n{doc.page_content}")
+        context_parts.append(
+            f"[snippet {i}] source: {source} | page: {page}\n{doc.page_content}"
+        )
 
     context = "\n\n".join(context_parts)
     prompt = FALLBACK_ANSWER_PROMPT.format(context=context, question=question)
@@ -214,10 +218,18 @@ def retrieve_with_scores(
     *,
     top_k: int | None = None,
     collection_name: str | None = None,
+    metadata_filter: dict | None = None,
 ) -> list[tuple[Document, float]]:
     k = SETTINGS.retriever_top_k if top_k is None else top_k
     vectorstore = get_vectorstore(collection_name=collection_name)
-    return [(doc, float(score)) for doc, score in vectorstore.similarity_search_with_score(query, k=k)]
+    return [
+        (doc, float(score))
+        for doc, score in vectorstore.similarity_search_with_score(
+            query,
+            k=k,
+            filter=metadata_filter,
+        )
+    ]
 
 
 def debug_retrieve(

@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DEO RAG Frontend</title>
+    <script>
+      try {
+        var stored = localStorage.getItem('deo-rag-theme');
+        var mode = stored === 'light' || stored === 'dark' ? stored : 'dark';
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.style.colorScheme = mode;
+      } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+        document.documentElement.style.colorScheme = 'dark';
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
+import deoLogoUrl from './deo_logo.png';
+
 const DEFAULT_API_PORT = 5200;
 const LOCALHOST_API_URL = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/i;
 
@@ -45,7 +47,15 @@ export default function App() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState('');
   const [question, setQuestion] = useState('');
-  const [queryScope, setQueryScope] = useState('active');
+  const [queryScope, setQueryScope] = useState(() => {
+    if (typeof window === 'undefined') return 'active';
+    try {
+      const saved = window.localStorage.getItem('deo-rag-query-scope');
+      return saved === 'global' ? 'global' : 'active';
+    } catch {
+      return 'active';
+    }
+  });
   const [answer, setAnswer] = useState('');
   const [sources, setSources] = useState([]);
   const [error, setError] = useState('');
@@ -70,10 +80,10 @@ export default function App() {
         return savedTheme;
       }
     } catch {
-      // Ignore storage access failures and fall back to system preference.
+      // Ignore storage access failures.
     }
 
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return 'dark';
   });
   const [activeSection, setActiveSection] = useState('overview');
   const [hardwareProfile, setHardwareProfile] = useState(null);
@@ -101,6 +111,14 @@ export default function App() {
       // Ignore storage access failures.
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('deo-rag-query-scope', queryScope);
+    } catch {
+      // Ignore
+    }
+  }, [queryScope]);
 
   const withKnowledgeBase = (path, knowledgeBaseOverride = null) => {
     const kb = (knowledgeBaseOverride || activeKnowledgeBase)?.trim();
@@ -651,7 +669,9 @@ export default function App() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
-          <div className="brand-mark">DEO</div>
+          <div className="brand-mark" aria-hidden="true">
+            <img src={deoLogoUrl} alt="" className="brand-logo-img" width={52} height={52} decoding="async" />
+          </div>
           <div>
             <p className="brand-kicker">DEO RAG Console</p>
             <h1>Defence estates workspace</h1>
