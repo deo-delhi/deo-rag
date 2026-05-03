@@ -27,11 +27,14 @@ class Settings:
     documents_dir: str
     ingest_chunk_size: int
     ingest_chunk_overlap: int
+    ingest_embed_batch_size: int
+    ingest_max_workers: int
     retriever_top_k: int
     llm_temperature: float
     ollama_num_ctx: int
     ollama_num_predict: int
     ollama_request_timeout_seconds: int
+    ollama_keep_alive: str
     ask_timeout_seconds: int
     allowed_origins: tuple[str, ...]
     allowed_origin_regex: str | None
@@ -65,11 +68,21 @@ SETTINGS = Settings(
     documents_dir=os.getenv("DOCUMENTS_DIR", "../documents"),
     ingest_chunk_size=int(os.getenv("INGEST_CHUNK_SIZE", "1000")),
     ingest_chunk_overlap=int(os.getenv("INGEST_CHUNK_OVERLAP", "150")),
-    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "6")),
+    # Number of chunks embedded + inserted into pgvector per batch. Higher values
+    # amortize HTTP/DB overhead and let GPU-backed embedders saturate the device.
+    ingest_embed_batch_size=int(os.getenv("INGEST_EMBED_BATCH_SIZE", "32")),
+    # Number of PDFs whose chunks are embedded concurrently. 0 = autodetect (cpu_count).
+    # Set to 1 to disable concurrency. Embedding is I/O- or GPU-bound, so a small
+    # pool is usually enough; oversubscribing a single GPU hurts throughput.
+    ingest_max_workers=int(os.getenv("INGEST_MAX_WORKERS", "0")),
+    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "4")),
     llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
-    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "8192")),
-    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "2048")),
-    ollama_request_timeout_seconds=int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "30")),
+    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
+    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "512")),
+    ollama_request_timeout_seconds=int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "180")),
+    # How long Ollama keeps a model resident in VRAM between requests. Long values
+    # avoid model reload stalls during ingestion. Use "-1" for "never unload".
+    ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "24h"),
     ask_timeout_seconds=int(os.getenv("ASK_TIMEOUT_SECONDS", "60")),
     allowed_origins=_parse_allowed_origins(os.getenv("ALLOWED_ORIGINS", "")) or _DEFAULT_ALLOWED_ORIGINS,
     allowed_origin_regex=os.getenv("ALLOWED_ORIGIN_REGEX") or None,

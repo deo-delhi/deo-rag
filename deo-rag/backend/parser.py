@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -23,8 +24,14 @@ def _parse_with_docling(file_path: Path) -> str:
     from docling.datamodel.pipeline_options import ThreadedPdfPipelineOptions
 
     device = docling_accelerator_device()
+    # Docling defaults num_threads to 4. On modern desktops with many cores
+    # (and on the CPU fallback path) that leaves a lot of throughput on the
+    # table. Cap at 16 to avoid contention; respect OMP_NUM_THREADS if set.
+    cpu_count = os.cpu_count() or 4
+    env_threads = os.getenv("OMP_NUM_THREADS")
+    num_threads = int(env_threads) if env_threads and env_threads.isdigit() else min(16, cpu_count)
     pipeline_options = ThreadedPdfPipelineOptions(
-        accelerator_options=AcceleratorOptions(device=device),
+        accelerator_options=AcceleratorOptions(device=device, num_threads=num_threads),
     )
     converter = DocumentConverter(
         format_options={

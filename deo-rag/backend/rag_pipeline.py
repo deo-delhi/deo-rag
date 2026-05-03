@@ -58,18 +58,37 @@ def get_embeddings():
     if SETTINGS.embedding_provider == "ollama":
         from langchain_ollama import OllamaEmbeddings
 
+        # langchain-ollama >= 0.3 requires keep_alive as int (seconds).
+        # Convert human-friendly strings like "24h" / "-1" to integer.
+        raw_ka = SETTINGS.ollama_keep_alive
+        try:
+            if raw_ka.lower().endswith("h"):
+                ka_seconds = int(raw_ka[:-1]) * 3600
+            elif raw_ka.lower().endswith("m"):
+                ka_seconds = int(raw_ka[:-1]) * 60
+            else:
+                ka_seconds = int(raw_ka)
+        except (ValueError, AttributeError):
+            ka_seconds = 86400  # default 24 hours
+
         return OllamaEmbeddings(
             model=SETTINGS.embedding_model,
             base_url=SETTINGS.ollama_base_url,
+            keep_alive=ka_seconds,
             client_kwargs={"timeout": SETTINGS.ollama_request_timeout_seconds},
         )
 
     if SETTINGS.embedding_provider == "huggingface":
         from langchain_community.embeddings import HuggingFaceEmbeddings
 
+        device = preferred_torch_device()
+        # Larger encode_batch_size keeps the GPU busy; bge-small-en is tiny so
+        # 64 fits comfortably in <1GB VRAM. Falls back gracefully on CPU.
+        encode_batch_size = 64 if device != "cpu" else 16
         return HuggingFaceEmbeddings(
             model_name="BAAI/bge-small-en",
-            model_kwargs={"device": preferred_torch_device()},
+            model_kwargs={"device": device},
+            encode_kwargs={"batch_size": encode_batch_size, "normalize_embeddings": True},
         )
 
     raise ValueError(
@@ -103,6 +122,7 @@ def get_llm(
             temperature=temperature,
             num_ctx=num_ctx,
             num_predict=num_predict,
+            keep_alive=SETTINGS.ollama_keep_alive,
             client_kwargs={"timeout": SETTINGS.ollama_request_timeout_seconds},
         )
 

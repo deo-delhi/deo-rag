@@ -1172,6 +1172,14 @@ button:disabled {
   margin-top: 12px;
 }
 
+.hardware-tier-chip {
+  margin-left: 10px;
+  vertical-align: middle;
+  font-size: 0.8em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .chip-ok {
   border-color: var(--success);
   background: var(--success-soft);

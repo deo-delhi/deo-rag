@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -143,11 +146,28 @@ def ingest(
     # so re-ingestion after a clear always has a valid target.
     vectorstore.create_collection()
 
-    for index, pdf_file in enumerate(pdf_files, start=1):
+    embed_batch_size = max(1, SETTINGS.ingest_embed_batch_size)
+    configured_workers = SETTINGS.ingest_max_workers
+    if configured_workers <= 0:
+        # Cap autodetect: a single GPU saturates with very few concurrent embed
+        # streams, and Ollama serialises requests per loaded model anyway.
+        configured_workers = min(4, max(1, (os.cpu_count() or 2) // 2))
+    max_workers = max(1, min(configured_workers, total_files))
+
+    state_lock = threading.Lock()
+    progress_lock = threading.Lock()
+
+    def safe_emit_progress(current_file: str | None, current_file_index: int, current_file_progress: int) -> None:
+        with progress_lock:
+            emit_progress(current_file, current_file_index, current_file_progress)
+
+    def process_file(index: int, pdf_file: Path) -> None:
+        nonlocal completed_files, successful_files, parsed_documents_total, chunks_indexed_total
+
         file_key = pdf_file.name
         file_progress[file_key]["status"] = "parsing"
         file_progress[file_key]["progress"] = 5
-        emit_progress(file_key, index, 5)
+        safe_emit_progress(file_key, index, 5)
 
         try:
             searchable_pdf_path, ocr_status = ensure_searchable_pdf(
@@ -162,26 +182,25 @@ def ingest(
                     ocr_status=ocr_status,
                 )
             )
-            parsed_documents_total += len(docs)
+            with state_lock:
+                parsed_documents_total += len(docs)
 
             file_progress[file_key]["status"] = "chunking"
             file_progress[file_key]["progress"] = 45
-            emit_progress(file_key, index, 45)
+            safe_emit_progress(file_key, index, 45)
 
             chunks = splitter.split_documents(docs)
             file_progress[file_key]["chunks"] = len(chunks)
 
             file_progress[file_key]["status"] = "indexing"
             file_progress[file_key]["progress"] = 75
-            emit_progress(file_key, index, 75)
+            safe_emit_progress(file_key, index, 75)
 
             if chunks:
                 total_chunks = len(chunks)
-                # Batch inserts provide better observability and reduce long single-transaction pauses.
-                batch_size = 1
 
-                for start in range(0, total_chunks, batch_size):
-                    batch = chunks[start : start + batch_size]
+                for start in range(0, total_chunks, embed_batch_size):
+                    batch = chunks[start : start + embed_batch_size]
                     indexed_before = start
                     indexed_after = min(total_chunks, start + len(batch))
 
@@ -189,30 +208,53 @@ def ingest(
                         f"[ingest] {file_key}: indexing batch {indexed_before + 1}-{indexed_after}/{total_chunks}"
                     )
                     vectorstore.add_documents(batch)
-                    chunks_indexed_total += len(batch)
+
+                    with state_lock:
+                        chunks_indexed_total += len(batch)
+                        chunks_indexed_snapshot = chunks_indexed_total
 
                     indexed_in_file = indexed_after
                     indexing_progress = 75 + int((indexed_in_file / total_chunks) * 24)
                     file_progress[file_key]["progress"] = min(indexing_progress, 99)
-                    emit_progress(file_key, index, file_progress[file_key]["progress"])
+                    safe_emit_progress(file_key, index, file_progress[file_key]["progress"])
 
                     print(
-                        f"[ingest] {file_key}: indexed {indexed_in_file}/{total_chunks} chunks"
+                        f"[ingest] {file_key}: indexed {indexed_in_file}/{total_chunks} chunks "
+                        f"(total so far: {chunks_indexed_snapshot})"
                     )
 
-            successful_files += 1
-            completed_files += 1
+            with state_lock:
+                successful_files += 1
+                completed_files += 1
             file_progress[file_key]["status"] = "completed"
             file_progress[file_key]["progress"] = 100
-            emit_progress(file_key, index, 100)
+            safe_emit_progress(file_key, index, 100)
         except Exception as exc:
-            completed_files += 1
-            failed_files.append(f"{file_key}: {exc}")
+            with state_lock:
+                completed_files += 1
+                failed_files.append(f"{file_key}: {exc}")
             print(f"[ingest][error] {file_key}: {exc!r}")
             print(traceback.format_exc())
             file_progress[file_key]["status"] = "failed"
             file_progress[file_key]["progress"] = 100
-            emit_progress(file_key, index, 100)
+            safe_emit_progress(file_key, index, 100)
+
+    if max_workers <= 1:
+        for index, pdf_file in enumerate(pdf_files, start=1):
+            process_file(index, pdf_file)
+    else:
+        # ThreadPoolExecutor is the right primitive here: the embedder is either
+        # a remote HTTP service (Ollama / OpenAI) or releases the GIL inside
+        # PyTorch / FAISS C++ kernels, so threads give us real parallelism
+        # without paying for process startup or losing the shared vectorstore.
+        print(f"[ingest] processing PDFs with {max_workers} parallel workers")
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(
+                pool.map(
+                    lambda item: process_file(item[0], item[1]),
+                    list(enumerate(pdf_files, start=1)),
+                )
+            )
 
     emit_progress(None, total_files, 100)
 

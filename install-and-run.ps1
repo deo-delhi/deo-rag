@@ -223,8 +223,16 @@ function Start-OllamaIfNeeded {
         Stop-Process -Name "ollama" -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     } catch {}
-    Write-Host "[ollama] Starting background service with CUDA_VISIBLE_DEVICES=0 ..."
+    Write-Host "[ollama] Starting background service with CUDA_VISIBLE_DEVICES=0, KEEP_ALIVE=24h, NUM_PARALLEL=4 ..."
     $env:CUDA_VISIBLE_DEVICES = "0"
+    # Keep models pinned in VRAM across requests; otherwise long ingestion runs
+    # pay a model-reload tax every few minutes when the default 5min idle hits.
+    $env:OLLAMA_KEEP_ALIVE = "24h"
+    # Allow Ollama to serve multiple embed/chat requests concurrently from the
+    # same loaded model. Pairs with the parallel ingest workers in ingest.py.
+    $env:OLLAMA_NUM_PARALLEL = "4"
+    # Allow more than one model resident at once (LLM + embedding model).
+    $env:OLLAMA_MAX_LOADED_MODELS = "2"
     Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
     if (-not (Wait-OllamaServer)) { throw "Ollama HTTP API did not start (localhost:11434)." }
 }
@@ -274,6 +282,157 @@ function Invoke-Pip {
         Start-Sleep -Seconds 5
     }
     throw "pip $($PipArgs -join ' ') failed after $MaxRetries attempts."
+}
+
+function Get-VideoAdapters {
+    try {
+        return @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+    } catch {
+        return @()
+    }
+}
+
+function Test-NvidiaGpuPresent {
+    try {
+        if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+            $proc = Start-Process -FilePath "nvidia-smi" -ArgumentList "-L" `
+                -NoNewWindow -PassThru -Wait -RedirectStandardOutput "$env:TEMP\nvsmi.out" `
+                -RedirectStandardError "$env:TEMP\nvsmi.err" -ErrorAction SilentlyContinue
+            if ($proc -and $proc.ExitCode -eq 0) { return $true }
+        }
+    } catch {}
+    foreach ($a in Get-VideoAdapters) {
+        if ($a.Name -match "NVIDIA") { return $true }
+    }
+    return $false
+}
+
+function Test-IntelArcGpuPresent {
+    foreach ($a in Get-VideoAdapters) {
+        # Intel Arc / Battlemage discrete cards. Intel iGPUs (UHD/Iris) are
+        # excluded here because XPU wheels target only the discrete line.
+        if ($a.Name -match "Intel" -and $a.Name -match "Arc|Battlemage") { return $true }
+    }
+    return $false
+}
+
+function Test-AmdOrIntelGpuPresent {
+    foreach ($a in Get-VideoAdapters) {
+        if ($a.Name -match "AMD|Radeon|Intel") { return $true }
+    }
+    return $false
+}
+
+function Get-PreferredAcceleratorTier {
+    # CUDA strictly wins because it's the only path the whole pipeline
+    # (Docling + HuggingFace + Ollama) can fully exploit.
+    if (Test-NvidiaGpuPresent)        { return "cuda" }
+    if (Test-IntelArcGpuPresent)      { return "xpu" }
+    if (Test-AmdOrIntelGpuPresent)    { return "directml" }
+    return "cpu"
+}
+
+function Install-GpuPyTorch {
+    param([Parameter(Mandatory)] [string] $VenvPython)
+    Write-Host "[gpu] NVIDIA GPU detected - replacing the CPU PyTorch wheel with a CUDA build."
+    # IMPORTANT: requirements.txt pulls torch transitively (sentence-transformers,
+    # docling, unstructured), and the default PyPI Windows wheel is CPU-only.
+    # Without --force-reinstall, a plain `pip install torch --index-url ...`
+    # is a no-op because pip sees torch as already-satisfied.
+    & $VenvPython -m pip uninstall -y torch torchvision torchaudio 2>&1 | Out-Null
+    # Try the newest CUDA index first, then fall back. PyTorch keeps
+    # compatibility with older drivers on cu121.
+    $ok = $false
+    foreach ($cuTag in @("cu126", "cu124", "cu121")) {
+        $url = "https://download.pytorch.org/whl/$cuTag"
+        Write-Host "[gpu] pip install torch torchvision torchaudio --index-url $url"
+        try {
+            & $VenvPython -m pip install --upgrade --force-reinstall `
+                --disable-pip-version-check --no-input --retries 5 --timeout 120 `
+                --index-url $url torch torchvision torchaudio
+            if ($LASTEXITCODE -eq 0) {
+                $probe = & $VenvPython -c "import torch; print(torch.cuda.is_available())" 2>$null
+                if ($probe -match "True") {
+                    $ok = $true
+                    Write-Host "[gpu] PyTorch CUDA wheel installed and detected the GPU ($cuTag)."
+                    break
+                }
+            }
+        } catch {}
+        Write-Warning "[gpu] $cuTag PyTorch wheel did not produce a usable CUDA runtime; trying next."
+    }
+    if (-not $ok) {
+        Write-Warning "[gpu] No CUDA PyTorch wheel installed cleanly. Reverting to CPU PyTorch so the app still works."
+        Invoke-Pip -PipArgs @("install", "--upgrade", "--force-reinstall", "torch", "torchvision", "torchaudio")
+    }
+    # paddlex (a transitive dep of paddleocr) caps numpy<2.4. The CUDA torch
+    # wheels happily pull numpy 2.4+, which then breaks paddlex at import time.
+    Invoke-Pip -PipArgs @("install", "--upgrade", "numpy<2.4")
+}
+
+function Repair-CpuPaddle {
+    param([Parameter(Mandatory)] [string] $VenvPython)
+    # NOTE: We deliberately do NOT install paddlepaddle-gpu alongside CUDA torch
+    # on Windows. Both wheels ship their own copy of cuDNN (cudnn_cnn64_9.dll)
+    # with different ABIs; whichever is loaded first prevents the other from
+    # importing. Since Docling already does GPU OCR via torch, PaddleOCR's role
+    # (creating a searchable-PDF sidecar in `ensure_searchable_pdf`) is a
+    # redundant safety net and can stay on CPU without hurting throughput.
+    Write-Host "[gpu] Keeping paddlepaddle on CPU to avoid the cuDNN ABI conflict with CUDA PyTorch on Windows."
+    & $VenvPython -m pip uninstall -y paddlepaddle paddlepaddle-gpu 2>&1 | Out-Null
+    Invoke-Pip -PipArgs @("install", "--upgrade", "paddlepaddle")
+}
+
+function Install-XpuPyTorch {
+    param([Parameter(Mandatory)] [string] $VenvPython)
+    Write-Host "[gpu] Intel Arc discrete GPU detected - installing PyTorch XPU wheels."
+    & $VenvPython -m pip uninstall -y torch torchvision torchaudio 2>&1 | Out-Null
+    $url = "https://download.pytorch.org/whl/xpu"
+    try {
+        & $VenvPython -m pip install --upgrade --force-reinstall `
+            --disable-pip-version-check --no-input --retries 5 --timeout 120 `
+            --index-url $url torch torchvision torchaudio
+        $probe = & $VenvPython -c "import torch; xpu = getattr(torch, 'xpu', None); print(bool(xpu and xpu.is_available()))" 2>$null
+        if ($probe -match "True") {
+            Write-Host "[gpu] PyTorch XPU wheel installed and detected an Intel GPU."
+            return
+        }
+    } catch {}
+    Write-Warning "[gpu] PyTorch XPU wheel did not produce a usable XPU runtime. Falling back to CPU PyTorch."
+    Invoke-Pip -PipArgs @("install", "--upgrade", "--force-reinstall", "torch", "torchvision", "torchaudio")
+}
+
+function Install-DirectMLPyTorch {
+    param([Parameter(Mandatory)] [string] $VenvPython)
+    Write-Host "[gpu] AMD/Intel GPU detected on Windows - installing torch-directml for cross-vendor GPU support."
+    # torch-directml ships its own CPU torch build it links against. Reset to a
+    # clean CPU torch first so we don't carry over any stale CUDA wheel that
+    # would conflict with directml's chosen torch version.
+    & $VenvPython -m pip uninstall -y torch torchvision torchaudio torch-directml 2>&1 | Out-Null
+    Invoke-Pip -PipArgs @("install", "--upgrade", "torch", "torchvision", "torchaudio")
+    try {
+        & $VenvPython -m pip install --upgrade --no-input --retries 3 --timeout 120 torch-directml
+        $probe = & $VenvPython -c "import torch_directml; print(torch_directml.is_available() if hasattr(torch_directml,'is_available') else (torch_directml.device_count() > 0))" 2>$null
+        if ($probe -match "True") {
+            Write-Host "[gpu] torch-directml installed and detected a DirectML device."
+            Write-Host "[gpu] Note: Docling and HuggingFace embeddings stay on CPU; DirectML is exposed for custom torch code."
+            return
+        }
+    } catch {}
+    Write-Warning "[gpu] torch-directml install did not produce a usable device. Continuing with CPU PyTorch only."
+}
+
+function Install-AcceleratedPyTorch {
+    param(
+        [Parameter(Mandatory)] [string] $VenvPython,
+        [Parameter(Mandatory)] [string] $Tier
+    )
+    switch ($Tier) {
+        "cuda"     { Install-GpuPyTorch     -VenvPython $VenvPython; Repair-CpuPaddle -VenvPython $VenvPython }
+        "xpu"      { Install-XpuPyTorch     -VenvPython $VenvPython }
+        "directml" { Install-DirectMLPyTorch -VenvPython $VenvPython }
+        default    { Write-Host "[gpu] No supported GPU detected - keeping CPU PyTorch wheels." }
+    }
 }
 
 function Wait-IngestFinished {
@@ -593,10 +752,10 @@ try {
     Invoke-Pip -PipArgs @("install", "--upgrade", "pip", "wheel", "setuptools")
     Write-Host "`n[python] Installing backend requirements (large download, several minutes) ..."
     Invoke-Pip -PipArgs @("install", "-r", (Join-Path $AppRoot "backend\requirements.txt"))
-    Write-Host "`n[python] Overriding with CUDA PyTorch and PaddlePaddle GPU versions ..."
-    & $script:VenvPython -m pip uninstall -y paddlepaddle 2>&1 | Out-Null
-    Invoke-Pip -PipArgs @("install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118")
-    Invoke-Pip -PipArgs @("install", "paddlepaddle-gpu")
+
+    $accelTier = Get-PreferredAcceleratorTier
+    Write-Host "`n[python] Accelerator tier resolved: $accelTier  (preference order: cuda > xpu > directml > cpu)"
+    Install-AcceleratedPyTorch -VenvPython $script:VenvPython -Tier $accelTier
 
     # .env
     $envPath = Join-Path $AppRoot ".env"
@@ -615,11 +774,11 @@ EMBEDDING_MODEL=mxbai-embed-large:latest
 
 INGEST_CHUNK_SIZE=1000
 INGEST_CHUNK_OVERLAP=150
-RETRIEVER_TOP_K=6
+RETRIEVER_TOP_K=4
 
 LLM_TEMPERATURE=0
-OLLAMA_NUM_CTX=8192
-OLLAMA_NUM_PREDICT=2048
+OLLAMA_NUM_CTX=4096
+OLLAMA_NUM_PREDICT=512
 OLLAMA_REQUEST_TIMEOUT_SECONDS=300
 ASK_TIMEOUT_SECONDS=300
 
@@ -681,12 +840,12 @@ ALLOWED_ORIGIN_REGEX=
         throw "Backend /health did not respond. Inspect $AppRoot\.run-logs\backend.log and re-run."
     }
 
-    Write-Host "`n[settings] Pushing UI defaults (llama3.2, top_k=6, num_predict=2048) ..."
+    Write-Host "`n[settings] Pushing UI defaults (llama3.2, top_k=4, num_predict=512) ..."
     $settingsBody = @{
         llm_model          = "llama3.2:latest"
-        retriever_top_k    = 6
-        ollama_num_predict = 2048
-        ollama_num_ctx     = 8192
+        retriever_top_k    = 4
+        ollama_num_predict = 512
+        ollama_num_ctx     = 4096
     } | ConvertTo-Json
     try {
         Invoke-RestMethod -Method Put -Uri "$BackendBase/settings" -Body $settingsBody -ContentType "application/json" -TimeoutSec 60 | Out-Null

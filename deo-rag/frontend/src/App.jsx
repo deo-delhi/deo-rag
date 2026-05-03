@@ -1207,10 +1207,18 @@ export default function App() {
           <div className="panel-header hardware-footer-header">
             <div>
               <p className="section-label">Hardware placement</p>
-              <h3>Accelerator calibration</h3>
+              <h3>
+                Accelerator calibration
+                {hardwareProfile?.accelerator_tier_label ? (
+                  <span className="chip chip-ok hardware-tier-chip">
+                    {hardwareProfile.accelerator_tier_label}
+                  </span>
+                ) : null}
+              </h3>
               <p className="subtitle tight">
-                Preferred order: NVIDIA CUDA → Intel PyTorch XPU (when installed) → CPU. Ollama chooses its own device;
-                this panel reflects detection plus the paths this app controls (Docling, HuggingFace embeddings, PaddleOCR).
+                Preferred order: NVIDIA CUDA → Intel PyTorch XPU → AMD/Intel DirectML (Windows) → CPU. Ollama chooses
+                its own device; this panel reflects detection plus the paths this app controls (Docling, HuggingFace
+                embeddings, PaddleOCR).
               </p>
             </div>
             <div className="hardware-footer-actions">
@@ -1290,8 +1298,14 @@ export default function App() {
                   <span className={`chip ${hardwareProfile.pytorch_xpu_usable ? 'chip-ok' : ''}`}>
                     PyTorch XPU: {hardwareProfile.pytorch_xpu_usable ? 'yes' : 'no'}
                   </span>
+                  <span className={`chip ${hardwareProfile.directml_usable ? 'chip-ok' : ''}`}>
+                    DirectML: {hardwareProfile.directml_usable ? 'available' : 'no'}
+                  </span>
                   <span className="chip">
                     Intel graphics: {hardwareProfile.intel_graphics_detected ? 'detected' : 'not listed'}
+                  </span>
+                  <span className="chip">
+                    AMD graphics: {hardwareProfile.amd_graphics_detected ? 'detected' : 'not listed'}
                   </span>
                 </div>
               </div>

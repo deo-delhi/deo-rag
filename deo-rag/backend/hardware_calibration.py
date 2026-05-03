@@ -1,11 +1,17 @@
 """
 Detect available accelerators and choose a stable fallback chain:
 
-NVIDIA CUDA (PyTorch kernels) → Intel XPU (PyTorch + IPEX / oneAPI, if installed)
-→ CPU.
+    NVIDIA CUDA (PyTorch kernels)
+        → Intel XPU (PyTorch + IPEX / oneAPI, if installed)
+        → AMD/Intel DirectML (Windows, via torch-directml, advisory only)
+        → CPU.
 
-Ollama GPU use is probed live via /api/ps; this process cannot force Intel iGPU
-for Ollama on Windows (Ollama targets NVIDIA/Metal/ROCm depending on build).
+The chosen tier is recorded as `accelerator_tier` and drives the device
+strings used by Docling, HuggingFace embeddings, and PaddleOCR.
+
+Ollama GPU use is probed live via /api/ps; this process cannot force a
+specific GPU for Ollama (Ollama picks NVIDIA / ROCm / Metal / Vulkan
+depending on the Ollama build).
 """
 
 from __future__ import annotations
@@ -110,6 +116,22 @@ def _pytorch_xpu_available() -> bool:
     return False
 
 
+def _torch_directml_available() -> bool:
+    """True when the `torch-directml` plugin is installed and exposes a device."""
+    try:
+        import torch_directml  # type: ignore[import-not-found]
+
+        is_avail = getattr(torch_directml, "is_available", None)
+        if callable(is_avail):
+            return bool(is_avail())
+        device_count = getattr(torch_directml, "device_count", None)
+        if callable(device_count):
+            return int(device_count()) > 0
+        return True
+    except Exception:
+        return False
+
+
 def _paddle_cuda_compiled() -> bool:
     try:
         import paddle
@@ -185,37 +207,76 @@ def calibrate(*, ollama_base_url: str) -> dict[str, Any]:
     primary_nvidia = (nvidia_names[0] if nvidia_names else None) or nvidia_smi
 
     nvidia_pytorch_ok = pytorch_cuda_can_execute()
+    xpu_ok = _pytorch_xpu_available()
+    directml_ok = _torch_directml_available()
+    intel_igpu = bool(intel_names)
+    amd_present = bool(amd_names)
+
     if nvidia_present and not nvidia_pytorch_ok:
         notes.append(
             "NVIDIA GPU present but PyTorch cannot run CUDA kernels on it "
-            "(unsupported compute capability or driver mismatch). Using CPU for PyTorch workloads unless Intel XPU is available."
+            "(unsupported compute capability, missing CUDA wheel, or driver mismatch). "
+            "Run install-and-run.ps1 again, or `pip install --force-reinstall --index-url "
+            "https://download.pytorch.org/whl/cu126 torch torchvision torchaudio`."
         )
-
-    xpu_ok = _pytorch_xpu_available()
-    intel_igpu = bool(intel_names)
-    if intel_igpu and not xpu_ok:
+    if intel_igpu and not xpu_ok and not directml_ok:
         notes.append(
-            "Intel graphics detected. Shared system memory can be large, but this "
-            "Python stack does not have an active PyTorch XPU runtime (Intel Extension for PyTorch / oneAPI). "
-            "Docling and HuggingFace embeddings fall back to CPU unless you install Intel GPU-enabled PyTorch."
+            "Intel graphics detected but neither PyTorch XPU nor torch-directml is installed. "
+            "Install one to unlock GPU acceleration: `pip install --index-url "
+            "https://download.pytorch.org/whl/xpu torch torchvision torchaudio` (Arc / Iris) "
+            "or `pip install torch-directml` (any Intel GPU on Windows)."
         )
+    if amd_present and not directml_ok:
+        if sys.platform == "win32":
+            notes.append(
+                "AMD GPU detected. Stock PyTorch wheels do not use AMD GPUs on Windows. "
+                "Install the cross-vendor DirectML backend with `pip install torch-directml` "
+                "to enable GPU offload for any custom torch code; Docling and sentence-"
+                "transformers still fall back to CPU because they do not accept DirectML "
+                "as a device string."
+            )
+        else:
+            notes.append(
+                "AMD GPU detected. Use ROCm PyTorch wheels on Linux (e.g. cu-rocm6.x) "
+                "to enable GPU acceleration for Docling and HuggingFace embeddings."
+            )
 
-    amd_present = bool(amd_names)
-    if amd_present:
-        notes.append(
-            "AMD GPU detected. Standard Windows PyTorch wheels do not use AMD GPUs "
-            "(ROCm is mainly Linux). Expect CPU for Docling and HuggingFace unless you use a specialized build."
-        )
-
-    docling_device = "cpu"
-    hf_device = "cpu"
+    # ---- Tier resolution ---------------------------------------------------
+    # The tier is the highest-quality device this app can actually drive.
+    # For Docling and sentence-transformers that means cuda > xpu > cpu (they
+    # don't accept DirectML). DirectML is still recorded so the UI can show
+    # that *some* GPU acceleration is available for custom code paths and
+    # surface it when nothing better is reachable.
     if nvidia_pytorch_ok:
+        accelerator_tier = "nvidia_cuda"
+        accelerator_tier_label = "NVIDIA CUDA"
         docling_device = "cuda"
         hf_device = "cuda"
     elif xpu_ok:
+        accelerator_tier = "intel_xpu"
+        accelerator_tier_label = "Intel PyTorch XPU"
         docling_device = "xpu"
         hf_device = "xpu"
         notes.append("Using Intel XPU for PyTorch-backed Docling and HuggingFace embeddings.")
+    elif directml_ok:
+        accelerator_tier = "directml"
+        accelerator_tier_label = "DirectML (advisory)"
+        # Docling/HuggingFace can't target DirectML directly, so keep them on
+        # CPU but flag the GPU as available for any future / custom code.
+        docling_device = "cpu"
+        hf_device = "cpu"
+        notes.append(
+            "DirectML is installed and can run plain torch ops on any DX12 GPU, but "
+            "Docling and sentence-transformers do not yet accept DirectML as a device. "
+            "Heavy PDF parsing and embeddings stay on CPU on this tier."
+        )
+    else:
+        accelerator_tier = "cpu"
+        accelerator_tier_label = "CPU"
+        docling_device = "cpu"
+        hf_device = "cpu"
+
+    fallback_chain_applied = ["nvidia_cuda", "intel_xpu", "directml", "cpu"]
 
     paddle_gpu = bool(nvidia_pytorch_ok and _paddle_cuda_compiled())
     if _paddle_cuda_compiled() and not nvidia_pytorch_ok:
@@ -223,10 +284,9 @@ def calibrate(*, ollama_base_url: str) -> dict[str, Any]:
 
     ollama_info = _probe_ollama(ollama_base_url)
     if ollama_info["reachable"] and ollama_info.get("models"):
-        # Clarify common Windows expectation
         notes.append(
             "Ollama GPU offload is independent of this app: it needs a supported "
-            "GPU in the Ollama build (often NVIDIA on Windows). Intel iGPU is not used by Ollama here unless your Ollama version explicitly supports it."
+            "GPU in the Ollama build (NVIDIA / ROCm / Metal / Vulkan)."
         )
 
     adapter_dump = [
@@ -241,7 +301,9 @@ def calibrate(*, ollama_base_url: str) -> dict[str, Any]:
     profile: dict[str, Any] = {
         "calibrated_at": datetime.now(timezone.utc).isoformat(),
         "platform": sys.platform,
-        "fallback_chain_applied": ["nvidia_cuda", "intel_xpu", "cpu"],
+        "accelerator_tier": accelerator_tier,
+        "accelerator_tier_label": accelerator_tier_label,
+        "fallback_chain_applied": fallback_chain_applied,
         "video_adapters": adapter_dump,
         "nvidia_detected": nvidia_present,
         "nvidia_primary_name": primary_nvidia,
@@ -251,6 +313,7 @@ def calibrate(*, ollama_base_url: str) -> dict[str, Any]:
         "amd_graphics_detected": amd_present,
         "amd_adapter_names": amd_names,
         "pytorch_xpu_usable": xpu_ok,
+        "directml_usable": directml_ok,
         "docling_accelerator": docling_device,
         "huggingface_torch_device": hf_device,
         "paddleocr_use_gpu": paddle_gpu,
@@ -302,7 +365,9 @@ def profile_for_api() -> dict[str, Any]:
     else:
         emb_compute = SETTINGS.embedding_provider
 
+    tier_label = base.get("accelerator_tier_label") or "CPU"
     base["usage_summary"] = {
+        "accelerator_tier": tier_label,
         "docling_pdf": f"Docling layout/OCR models → `{base.get('docling_accelerator', 'cpu')}`",
         "embeddings": emb_compute,
         "llm": f"LLM via `{SETTINGS.llm_provider}` — if Ollama, see `ollama.summary`",
@@ -310,6 +375,11 @@ def profile_for_api() -> dict[str, Any]:
             "PaddleOCR → NVIDIA CUDA"
             if base.get("paddleocr_use_gpu")
             else "PaddleOCR → CPU"
+        ),
+        "directml": (
+            "torch-directml available for custom GPU code"
+            if base.get("directml_usable")
+            else "torch-directml not installed"
         ),
     }
     return base
