@@ -24,12 +24,17 @@ def _parse_with_docling(file_path: Path) -> str:
     from docling.datamodel.pipeline_options import ThreadedPdfPipelineOptions
 
     device = docling_accelerator_device()
-    # Docling defaults num_threads to 4. On modern desktops with many cores
-    # (and on the CPU fallback path) that leaves a lot of throughput on the
-    # table. Cap at 16 to avoid contention; respect OMP_NUM_THREADS if set.
+    # Docling defaults num_threads to 4. On CPU, use more threads for PDF prep;
+    # on CUDA, the layout models already occupy the GPU — keep CPU side modest
+    # to avoid oversubscription. Respect OMP_NUM_THREADS if set.
     cpu_count = os.cpu_count() or 4
     env_threads = os.getenv("OMP_NUM_THREADS")
-    num_threads = int(env_threads) if env_threads and env_threads.isdigit() else min(16, cpu_count)
+    if env_threads and env_threads.isdigit():
+        num_threads = int(env_threads)
+    elif device == "cuda":
+        num_threads = min(8, max(4, cpu_count // 2))
+    else:
+        num_threads = min(16, cpu_count)
     pipeline_options = ThreadedPdfPipelineOptions(
         accelerator_options=AcceleratorOptions(device=device, num_threads=num_threads),
     )

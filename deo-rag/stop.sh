@@ -7,6 +7,21 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 BACKEND_PORT="${BACKEND_PORT:-5200}"
 FRONTEND_PORT="${FRONTEND_PORT:-5201}"
 POSTGRES_PORT="${POSTGRES_PORT:-5202}"
+DOCKER=(docker)
+
+configure_docker_command() {
+  if docker info >/dev/null 2>&1; then
+    DOCKER=(docker)
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+    return
+  fi
+
+  DOCKER=(docker)
+}
 
 kill_port() {
   local port="$1"
@@ -30,8 +45,10 @@ kill_port() {
 }
 
 main() {
+  configure_docker_command
+
   echo "Stopping compose services..."
-  docker compose -f "$COMPOSE_FILE" down --remove-orphans || true
+  "${DOCKER[@]}" compose -f "$COMPOSE_FILE" down --remove-orphans || true
 
   kill_port "$BACKEND_PORT" "backend"
   kill_port "$FRONTEND_PORT" "frontend"

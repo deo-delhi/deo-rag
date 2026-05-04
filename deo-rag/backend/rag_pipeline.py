@@ -82,9 +82,16 @@ def get_embeddings():
         from langchain_community.embeddings import HuggingFaceEmbeddings
 
         device = preferred_torch_device()
-        # Larger encode_batch_size keeps the GPU busy; bge-small-en is tiny so
-        # 64 fits comfortably in <1GB VRAM. Falls back gracefully on CPU.
-        encode_batch_size = 64 if device != "cpu" else 16
+        configured = SETTINGS.ingest_hf_encode_batch_size
+        if configured and configured > 0:
+            encode_batch_size = configured
+        elif device == "cuda":
+            # Larger batches amortize Python overhead and keep the GPU fed; tune down if OOM.
+            encode_batch_size = 96
+        elif device == "xpu":
+            encode_batch_size = 64
+        else:
+            encode_batch_size = 16
         return HuggingFaceEmbeddings(
             model_name="BAAI/bge-small-en",
             model_kwargs={"device": device},

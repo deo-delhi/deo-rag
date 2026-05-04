@@ -215,9 +215,11 @@ def calibrate(*, ollama_base_url: str) -> dict[str, Any]:
     if nvidia_present and not nvidia_pytorch_ok:
         notes.append(
             "NVIDIA GPU present but PyTorch cannot run CUDA kernels on it "
-            "(unsupported compute capability, missing CUDA wheel, or driver mismatch). "
-            "Run install-and-run.ps1 again, or `pip install --force-reinstall --index-url "
-            "https://download.pytorch.org/whl/cu126 torch torchvision torchaudio`."
+            "(GPU may be too old for this PyTorch build, the CUDA wheel may not match the driver, "
+            "or the install fell back to CPU torch). "
+            "Update the driver from https://www.nvidia.com/Download/index.aspx then re-run "
+            "install-and-run.ps1, or repair wheels with deo-rag/scripts/repair-cuda-pytorch.ps1 "
+            "(tries cu126 → cu118; cu118 often works on older drivers)."
         )
     if intel_igpu and not xpu_ok and not directml_ok:
         notes.append(
