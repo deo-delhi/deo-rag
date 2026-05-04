@@ -14,6 +14,7 @@ FRONTEND_PORT="${FRONTEND_PORT:-5201}"
 VENV_PY="${VENV_PY:-$ROOT_DIR/../.venv/bin/python}"
 POSTGRES_PORT="${POSTGRES_PORT:-5202}"
 CHECK_HOST="${CHECK_HOST:-127.0.0.1}"
+DOCKER=(docker)
 
 detect_access_host() {
   if [[ -n "${PUBLIC_HOST:-}" ]]; then
@@ -62,6 +63,21 @@ ensure_command() {
   fi
 }
 
+configure_docker_command() {
+  if docker info >/dev/null 2>&1; then
+    DOCKER=(docker)
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+    return
+  fi
+
+  echo "Docker is not reachable. Start Docker, or run: sudo usermod -aG docker \"$USER\" and open a new shell." >&2
+  exit 1
+}
+
 ensure_port_free() {
   local port="$1"
   local name="$2"
@@ -97,11 +113,11 @@ wait_for_http() {
 
 start_postgres() {
   echo "Starting PostgreSQL..."
-  docker compose -f "$COMPOSE_FILE" up -d postgres
+  "${DOCKER[@]}" compose -f "$COMPOSE_FILE" up -d postgres
 
   echo "Waiting for PostgreSQL to be ready..."
   for _ in $(seq 1 60); do
-    if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U admin -d deorag >/dev/null 2>&1; then
+    if "${DOCKER[@]}" compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U admin -d deorag >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -129,15 +145,23 @@ start_frontend() {
   frontend_pid=$!
 }
 
+write_pids() {
+  cat >"$LOG_DIR/pids.json" <<EOF
+{"backend":$backend_pid,"frontend":$frontend_pid}
+EOF
+}
+
 main() {
-  if [[ "${1:-start}" != "start" ]]; then
-    echo "Usage: $0 [start]" >&2
+  local mode="${1:-start}"
+  if [[ "$mode" != "start" && "$mode" != "--detach" && "$mode" != "detach" ]]; then
+    echo "Usage: $0 [start|--detach]" >&2
     exit 1
   fi
 
   ensure_command docker
   ensure_command npm
   ensure_command curl
+  configure_docker_command
 
   if [[ ! -f "$ROOT_DIR/.env" ]]; then
     echo "Missing .env file at $ROOT_DIR/.env" >&2
@@ -172,6 +196,7 @@ main() {
   start_postgres
   start_backend
   start_frontend
+  write_pids
 
   wait_for_http "http://$CHECK_HOST:$BACKEND_PORT/health" "backend health endpoint"
   wait_for_http "http://$CHECK_HOST:$FRONTEND_PORT" "frontend dev server"
@@ -184,6 +209,13 @@ main() {
   echo "  Frontend: http://$ACCESS_HOST:$FRONTEND_PORT"
   echo "  Logs:     $LOG_DIR/backend.log and $LOG_DIR/frontend.log"
   echo ""
+
+  if [[ "$mode" == "--detach" || "$mode" == "detach" ]]; then
+    trap - EXIT INT TERM
+    echo "Run bash stop.sh to shut everything down."
+    exit 0
+  fi
+
   echo "Press Ctrl+C to stop everything."
 
   wait -n "$backend_pid" "$frontend_pid"

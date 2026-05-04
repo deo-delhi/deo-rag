@@ -15,6 +15,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from .config import SETTINGS
 from .parser import ensure_searchable_pdf, parse_pdf
 from .rag_pipeline import get_embeddings
+from .torch_device import pytorch_cuda_can_execute
 
 
 @dataclass
@@ -153,6 +154,28 @@ def ingest(
         # streams, and Ollama serialises requests per loaded model anyway.
         configured_workers = min(4, max(1, (os.cpu_count() or 2) // 2))
     max_workers = max(1, min(configured_workers, total_files))
+
+    cuda_ok = pytorch_cuda_can_execute()
+    emb = SETTINGS.embedding_provider.lower()
+    if cuda_ok:
+        if emb == "huggingface":
+            # One shared HF model on GPU: concurrent threads serialize in the GIL
+            # anyway and risk VRAM spikes from overlapping Docling + embed.
+            if max_workers > 1:
+                print(
+                    f"[ingest] CUDA + HuggingFace embeddings: capping parallel PDF workers "
+                    f"from {max_workers} to 1 for GPU throughput (set INGEST_MAX_WORKERS=1 to silence)."
+                )
+            max_workers = 1
+        else:
+            # Docling can use CUDA; keep a small pool so two PDFs rarely fight the same device.
+            capped = min(max_workers, 2)
+            if capped < max_workers:
+                print(
+                    f"[ingest] CUDA available: capping parallel PDF workers from {max_workers} to {capped} "
+                    f"(set INGEST_MAX_WORKERS explicitly to override)."
+                )
+            max_workers = capped
 
     state_lock = threading.Lock()
     progress_lock = threading.Lock()

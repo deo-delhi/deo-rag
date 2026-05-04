@@ -343,7 +343,9 @@ function Install-GpuPyTorch {
     # Try the newest CUDA index first, then fall back. PyTorch keeps
     # compatibility with older drivers on cu121.
     $ok = $false
-    foreach ($cuTag in @("cu126", "cu124", "cu121")) {
+    # cu118 last: older Windows drivers (pre-525) can load CUDA 11.8 runtimes; CUDA 12
+    # wheels need recent Game Ready / Studio drivers. See NVIDIA download if all probes fail.
+    foreach ($cuTag in @("cu126", "cu124", "cu121", "cu118")) {
         $url = "https://download.pytorch.org/whl/$cuTag"
         Write-Host "[gpu] pip install torch torchvision torchaudio --index-url $url"
         try {
@@ -363,6 +365,7 @@ function Install-GpuPyTorch {
     }
     if (-not $ok) {
         Write-Warning "[gpu] No CUDA PyTorch wheel installed cleanly. Reverting to CPU PyTorch so the app still works."
+        Write-Warning "[gpu] If you have an NVIDIA GPU, update the display driver from https://www.nvidia.com/Download/index.aspx then re-run this script (CUDA 12 wheels typically need driver 525+; cu118 may work on older drivers)."
         Invoke-Pip -PipArgs @("install", "--upgrade", "--force-reinstall", "torch", "torchvision", "torchaudio")
     }
     # paddlex (a transitive dep of paddleocr) caps numpy<2.4. The CUDA torch
@@ -774,6 +777,9 @@ EMBEDDING_MODEL=mxbai-embed-large:latest
 
 INGEST_CHUNK_SIZE=1000
 INGEST_CHUNK_OVERLAP=150
+INGEST_EMBED_BATCH_SIZE=32
+INGEST_MAX_WORKERS=0
+INGEST_HF_ENCODE_BATCH_SIZE=0
 RETRIEVER_TOP_K=4
 
 LLM_TEMPERATURE=0

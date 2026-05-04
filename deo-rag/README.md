@@ -24,4 +24,14 @@ The app supports:
 - Sources Referred links that open the cited parent PDF
 - Clear-data and re-ingest flows
 
-For day-to-day operations, use `bash script.sh` to start the stack and `bash stop.sh` to shut it down.
+For day-to-day operations on Linux/WSL:
+
+- Foreground start: `bash script.sh`
+- Background start: `bash script.sh --detach`
+- Stop: `bash stop.sh`
+
+For a full Ubuntu/WSL bootstrap from a fresh machine, run the repository-level one-command installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deo-delhi/deo-rag/main/setup-deo-rag.sh | bash
+```

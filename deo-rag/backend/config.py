@@ -29,6 +29,8 @@ class Settings:
     ingest_chunk_overlap: int
     ingest_embed_batch_size: int
     ingest_max_workers: int
+    # HuggingFace embedding encode batch (0 = use backend defaults: larger on GPU).
+    ingest_hf_encode_batch_size: int
     retriever_top_k: int
     llm_temperature: float
     ollama_num_ctx: int
@@ -75,6 +77,7 @@ SETTINGS = Settings(
     # Set to 1 to disable concurrency. Embedding is I/O- or GPU-bound, so a small
     # pool is usually enough; oversubscribing a single GPU hurts throughput.
     ingest_max_workers=int(os.getenv("INGEST_MAX_WORKERS", "0")),
+    ingest_hf_encode_batch_size=int(os.getenv("INGEST_HF_ENCODE_BATCH_SIZE", "0")),
     retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "4")),
     llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
     ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
