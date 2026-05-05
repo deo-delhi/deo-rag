@@ -94,7 +94,6 @@ pip install langchain-openai langchain-community
 pip install fastapi uvicorn
 pip install psycopg2-binary pgvector sqlalchemy
 pip install pypdf pymupdf
-pip install unstructured[all-docs]
 pip install docling
 pip install sentence-transformers
 pip install rank-bm25

@@ -199,7 +199,7 @@ python3 -m venv ../.venv
 - FastAPI + Uvicorn for the HTTP layer
 - LangChain (classic + community + text-splitters), LangGraph, LangSmith
 - `psycopg2-binary`, `pgvector`, `sqlalchemy` for the vector store
-- `pypdf`, `pymupdf`, `unstructured[all-docs]`, `docling` for PDF parsing
+- `pypdf`, `pymupdf`, `docling` for PDF parsing
 - `paddleocr` and `paddlepaddle` for sidecar searchable-PDF generation
 - `sentence-transformers`, `rank-bm25`, `tiktoken`, `openai`, `langchain-ollama`
 

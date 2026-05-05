@@ -336,7 +336,7 @@ function Install-GpuPyTorch {
     param([Parameter(Mandatory)] [string] $VenvPython)
     Write-Host "[gpu] NVIDIA GPU detected - replacing the CPU PyTorch wheel with a CUDA build."
     # IMPORTANT: requirements.txt pulls torch transitively (sentence-transformers,
-    # docling, unstructured), and the default PyPI Windows wheel is CPU-only.
+    # docling), and the default PyPI Windows wheel is CPU-only.
     # Without --force-reinstall, a plain `pip install torch --index-url ...`
     # is a no-op because pip sees torch as already-satisfied.
     & $VenvPython -m pip uninstall -y torch torchvision torchaudio 2>&1 | Out-Null
