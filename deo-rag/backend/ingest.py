@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,7 +15,59 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .config import SETTINGS
 from .parser import ensure_searchable_pdf, parse_pdf
-from .rag_pipeline import get_embeddings
+from .rag_pipeline import get_embeddings, get_llm
+
+def _extract_keywords(text: str) -> str:
+    """Simple local keyword extraction."""
+    import re
+    from collections import Counter
+    words = re.findall(r'\w+', text.lower())
+    # Filter out common stop words if needed, or just take top tokens
+    # For now, just take unique words that are long enough
+    keywords = [w for w in words if len(w) > 4]
+    counts = Counter(keywords)
+    return ", ".join([w for w, _ in counts.most_common(10)])
+
+def _generate_summary(text: str, llm: Any) -> str:
+    """Very short summary using local LLM."""
+    if not llm:
+        return text[:200]
+    try:
+        # Use a very restrictive context to keep it fast
+        prompt = f"Summarize the following text in one short sentence:\n\n{text[:1000]}"
+        response = llm.invoke(prompt)
+        content = getattr(response, "content", str(response))
+        return content.strip()
+    except Exception:
+        return text[:200]
+
+def _create_multi_vector_representations(chunks: list[Document], llm: Any = None) -> list[Document]:
+    all_representations = []
+    for chunk in chunks:
+        parent_id = str(uuid.uuid4())
+        # Original chunk metadata update
+        chunk.metadata["parent_chunk_id"] = parent_id
+        chunk.metadata["representation"] = "full"
+        all_representations.append(chunk)
+        
+        # Keywords representation (always fast)
+        keywords_text = _extract_keywords(chunk.page_content)
+        keywords_doc = Document(
+            page_content=keywords_text,
+            metadata={**chunk.metadata, "representation": "keywords", "parent_chunk_id": parent_id}
+        )
+        all_representations.append(keywords_doc)
+
+        # Summary representation (optional or based on length)
+        if llm and len(chunk.page_content) > 300:
+            summary_text = _generate_summary(chunk.page_content, llm)
+            summary_doc = Document(
+                page_content=summary_text,
+                metadata={**chunk.metadata, "representation": "summary", "parent_chunk_id": parent_id}
+            )
+            all_representations.append(summary_doc)
+        
+    return all_representations
 from .torch_device import pytorch_cuda_can_execute
 
 
@@ -84,7 +137,10 @@ def ingest(
     resolved_documents_dir = documents_dir or (Path(__file__).resolve().parent / SETTINGS.documents_dir)
     resolved_documents_dir = resolved_documents_dir.resolve()
 
-    pdf_files = sorted(resolved_documents_dir.glob("*.pdf"), key=lambda p: p.name.lower())
+    pdf_files = sorted(
+        list(resolved_documents_dir.glob("*.pdf")) + list(resolved_documents_dir.glob("*.PDF")),
+        key=lambda p: p.name.lower()
+    )
 
     if not pdf_files:
         print(f"No PDFs found in {resolved_documents_dir}")
@@ -125,12 +181,11 @@ def ingest(
             }
         )
 
-    emit_progress(None, 0, 0)
-
+    # Layout-aware separators (Markdown focus)
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " "],
+        separators=["\n### ", "\n## ", "\n# ", "\n\n", "\n", ". ", " "],
     )
 
     embeddings = get_embeddings()
@@ -212,7 +267,20 @@ def ingest(
             file_progress[file_key]["progress"] = 45
             safe_emit_progress(file_key, index, 45)
 
-            chunks = splitter.split_documents(docs)
+            chunks = []
+            pre_chunked = all(d.metadata.get("docling_chunk") for d in docs)
+            
+            if pre_chunked:
+                chunks = docs
+            else:
+                chunks = splitter.split_documents(docs)
+            
+            if SETTINGS.enable_multi_vector:
+                file_progress[file_key]["status"] = "generating_representations"
+                safe_emit_progress(file_key, index, 60)
+                llm = get_llm(ollama_num_predict=64) if SETTINGS.llm_provider == "ollama" else None
+                chunks = _create_multi_vector_representations(chunks, llm)
+                
             file_progress[file_key]["chunks"] = len(chunks)
 
             file_progress[file_key]["status"] = "indexing"

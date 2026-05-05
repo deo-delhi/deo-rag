@@ -14,8 +14,10 @@ pgvector
 sqlalchemy
 pypdf
 pymupdf
+pdfplumber
 unstructured[all-docs]
 docling
+ocrmypdf
 sentence-transformers
 rank-bm25
 tiktoken

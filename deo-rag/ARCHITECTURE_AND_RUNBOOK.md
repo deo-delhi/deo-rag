@@ -73,12 +73,13 @@ This file implements the ingestion pipeline.
 Flow:
 
 1. Discover PDFs in `documents/`
-2. Parse each PDF into LangChain `Document` objects
+2. Parse each PDF into LangChain `Document` objects using Docling structure-aware parsing
 3. Generate `.searchable/` sidecar PDFs for scanned or low-text PDFs when OCR can run
 4. Sanitize text and metadata
-5. Split documents into chunks
-6. Embed and write chunks to pgvector
-7. Emit progress updates to the API state
+5. Split documents into chunks using `HybridChunker` (preserves tables and sections)
+6. Generate multi-vector representations (Summary, Keywords) for each chunk if enabled
+7. Embed and write chunks to pgvector
+8. Emit progress updates to the API state
 
 Recent operational fix:
 
@@ -101,11 +102,30 @@ This file wires together:
 
 - the embedding provider
 - the vector store
-- the retriever
+- the custom `HybridRerankRetriever`
+- the local cross-encoder reranker
 - the LLM
 - the RetrievalQA chain
 
+The retrieval pipeline now follows an advanced multi-stage flow:
+1. **Query Processing**: Expansion with synonyms and classification (keyword vs semantic).
+2. **Hybrid Retrieval**: BM25 + Dense vector search with dynamic weighting based on query type.
+3. **Parent Context Expansion**: If a summary or keyword chunk matches, the full text representation is retrieved.
+4. **Reranking**: A local cross-encoder rescores the top candidates for maximum precision.
+
 The prompt is constrained so the model should answer only from the retrieved context.
+
+### `backend/query_processor.py`
+
+Handles query expansion and classification. It uses a domain-specific synonym dictionary and rules to detect keyword-heavy queries (e.g., those containing IDs or specific codes) to optimize retrieval weighting.
+
+### `backend/reranker.py`
+
+Implements a local reranking stage using a cross-encoder model (default: `ms-marco-MiniLM-L-6-v2`). It takes the top-N results from hybrid retrieval and re-orders them based on deep semantic relevance to the query.
+
+### `backend/structure_chunking.py`
+
+Provides structure-aware chunking using Docling's `HybridChunker`. It preserves section boundaries, keeps tables as atomic units, and maintains hierarchical metadata (headings, page numbers).
 
 ### `backend/config.py`
 

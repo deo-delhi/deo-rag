@@ -8,8 +8,20 @@ import logging
 
 from .config import SETTINGS
 from .torch_device import preferred_torch_device
+from .reranker import Reranker
 
 logger = logging.getLogger(__name__)
+
+_RERANKER = None
+
+def get_reranker(model_name: str | None = None):
+    global _RERANKER
+    if model_name and _RERANKER and _RERANKER.model_name != model_name:
+        # If a different model is requested, create a new one
+        return Reranker(model_name=model_name)
+    if _RERANKER is None:
+        _RERANKER = Reranker(model_name=model_name)
+    return _RERANKER
 
 
 PROMPT = PromptTemplate(
@@ -136,10 +148,80 @@ def get_llm(
     raise ValueError("Unsupported LLM_PROVIDER. Use 'openai' or 'ollama'.")
 
 
+def _expand_to_parent_context(docs: list[Document], collection_name: str) -> list[Document]:
+    """Expands documents to their full representations if they are summaries/keywords."""
+    expanded_docs = []
+    seen_parent_ids = set()
+    
+    # We need to fetch the 'full' representation for chunks that matched via summary/keywords
+    parent_ids_to_fetch = []
+    for doc in docs:
+        parent_id = doc.metadata.get("parent_chunk_id")
+        rep = doc.metadata.get("representation")
+        
+        if parent_id and rep != "full":
+            if parent_id not in seen_parent_ids:
+                parent_ids_to_fetch.append(parent_id)
+                seen_parent_ids.add(parent_id)
+        else:
+            expanded_docs.append(doc)
+            if parent_id:
+                seen_parent_ids.add(parent_id)
+                
+    if parent_ids_to_fetch:
+        vectorstore = get_vectorstore(collection_name=collection_name)
+        # Fetch 'full' representations
+        for pid in parent_ids_to_fetch:
+            # This is a bit slow as it's one by one, but LangChain's PGVector 
+            # doesn't easily support arbitrary metadata filtering in a batch fetch without custom SQL
+            # For now, we'll just use what we have or skip expansion if too many
+            results = vectorstore.similarity_search("", k=1, filter={"parent_chunk_id": pid, "representation": "full"})
+            if results:
+                expanded_docs.extend(results)
+                
+    return expanded_docs
+
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from typing import List
+
+class HybridRerankRetriever(BaseRetriever):
+    collection_name: str
+    top_k: int
+    rerank: bool = True
+    reranker_model: str | None = None
+    
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun = None
+    ) -> List[Document]:
+        from .hybrid_retrieval import hybrid_retrieve
+        
+        # 1. Hybrid Retrieval (BM25 + Dense)
+        hits = hybrid_retrieve(
+            query, 
+            collection_name=self.collection_name, 
+            top_k=self.top_k * 3 # Fetch more for reranking
+        )
+        docs = [doc for doc, score in hits]
+        
+        # 2. Parent Context Expansion
+        if SETTINGS.enable_multi_vector:
+            docs = _expand_to_parent_context(docs, self.collection_name)
+            
+        # 3. Reranking
+        if self.rerank:
+            reranker = get_reranker(model_name=self.reranker_model)
+            docs = reranker.rerank(query, docs, top_k=self.top_k)
+        else:
+            docs = docs[:self.top_k]
+            
+        return docs
+
 def build_qa_chain(
     *,
     retriever_top_k: int | None = None,
     llm_model: str | None = None,
+    reranker_model: str | None = None,
     llm_temperature: float | None = None,
     ollama_num_ctx: int | None = None,
     ollama_num_predict: int | None = None,
@@ -148,19 +230,13 @@ def build_qa_chain(
 ) -> RetrievalQA:
     top_k = SETTINGS.retriever_top_k if retriever_top_k is None else retriever_top_k
 
-    vectorstore = get_vectorstore(collection_name=collection_name)
-    
-    # Use MMR (Maximal Marginal Relevance) for better diversity and relevance
-    # This reduces redundancy in retrieved chunks while maintaining relevance
-    search_kwargs = {"k": top_k}
-    if use_mmr:
-        search_type = "mmr"
-        search_kwargs["fetch_k"] = top_k * 3  # Fetch more candidates for MMR to evaluate
-        search_kwargs["lambda_mult"] = 0.5  # Balance between relevance and diversity
-    else:
-        search_type = "similarity"
-    
-    retriever = vectorstore.as_retriever(search_type=search_type, search_kwargs=search_kwargs)
+    # Use the new HybridRerankRetriever
+    retriever = HybridRerankRetriever(
+        collection_name=collection_name or SETTINGS.collection_name,
+        top_k=top_k,
+        rerank=True,
+        reranker_model=reranker_model
+    )
 
     llm = get_llm(
         llm_model=llm_model,

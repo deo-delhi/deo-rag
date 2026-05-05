@@ -1,0 +1,48 @@
+[
+  {
+    "config": "Current Defaults (Ollama + Ollama)",
+    "total_time": 23.209169387817383,
+    "avg_time": 7.736389795939128,
+    "peak_vram": 218.0,
+    "results": [
+      {
+        "query": "What is the site address and GLR Survey No. mentioned in the notice dated 14th December, 2001 in the Usha Kapoor case?",
+        "answer": "Elgin Road, bearing General Land Register (GLR) Survey No.214.",
+        "time": 21.747217416763306
+      },
+      {
+        "query": "Who are the appellants in Civil Appeal No. 1844 of 2008?",
+        "answer": "Smt. Usha Kapoor & Ors.",
+        "time": 0.7394356727600098
+      },
+      {
+        "query": "Which Governor General-in-Council Order was cited in the resumption notice in the Usha Kapoor judgment?",
+        "answer": "The Governor General-in-Council Order cited in the resumption notice in the Usha Kapoor judgment is Order No. 179 of 1836.",
+        "time": 0.7225162982940674
+      }
+    ]
+  },
+  {
+    "config": "Recommended (Ollama + HuggingFace)",
+    "total_time": 40.37908887863159,
+    "avg_time": 13.459696292877197,
+    "peak_vram": 600.0,
+    "results": [
+      {
+        "query": "What is the site address and GLR Survey No. mentioned in the notice dated 14th December, 2001 in the Usha Kapoor case?",
+        "answer": "Elgin Road, bearing General Land Register (GLR) Survey No.214.",
+        "time": 28.774279594421387
+      },
+      {
+        "query": "Who are the appellants in Civil Appeal No. 1844 of 2008?",
+        "answer": "Smt. Usha Kapoor & Ors.",
+        "time": 5.8301520347595215
+      },
+      {
+        "query": "Which Governor General-in-Council Order was cited in the resumption notice in the Usha Kapoor judgment?",
+        "answer": "Order No.179 of 1836.",
+        "time": 5.774657249450684
+      }
+    ]
+  }
+]

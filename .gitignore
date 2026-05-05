@@ -2,3 +2,4 @@
 .cursor
 node_modules
 __pycache__
+experimental_vram_env

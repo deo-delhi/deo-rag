@@ -169,8 +169,12 @@ main() {
   fi
 
   if command -v ollama >/dev/null 2>&1; then
-    echo "Pulling the latest llama3.2 model in Ollama (this may take a while if not cached)..."
-    ollama pull llama3.2:latest || true
+    # Respect .env if present, else fallback
+    local env_model
+    env_model="$(grep "^LLM_MODEL=" "$ROOT_DIR/.env" | cut -d= -f2- || echo "")"
+    local model_to_pull="${env_model:-llama3.2:latest}"
+    echo "Pulling model ${model_to_pull} in Ollama (this may take a while if not cached)..."
+    ollama pull "$model_to_pull" || true
   else
     echo "Ollama is not installed or not in PATH, skipping model pull."
   fi

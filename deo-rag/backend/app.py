@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, HTTPException, Query as FastAPIQuery, UploadF
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import httpx
 from httpx import ReadTimeout
 from urllib.parse import quote
 
@@ -451,8 +452,13 @@ def _enrich_doc_metadata(doc, *, library: str, score: float | None = None) -> No
     )
 
 
-def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[object, float]]:
+def _retrieve_for_libraries(
+    question: str, 
+    libraries: list[str], 
+    reranker_model: str | None = None
+) -> list[tuple[object, float]]:
     from .hybrid_retrieval import hybrid_retrieve
+    from .rag_pipeline import get_reranker
 
     retrieved: list[tuple[object, float]] = []
     top_k = runtime_settings["retriever_top_k"]
@@ -461,6 +467,8 @@ def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[o
         collection_name = _knowledge_base_collection_name(library)
         matched_sources = _matching_sources_for_question(question, library)
         try:
+            # Fetch a larger candidate pool for reranking
+            candidate_pool = top_k * 3
             if matched_sources:
                 docs_with_scores = []
                 for source in matched_sources:
@@ -468,7 +476,7 @@ def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[o
                         hybrid_retrieve(
                             question,
                             collection_name=collection_name,
-                            top_k=max(top_k, 6),
+                            top_k=max(candidate_pool, 12),
                             metadata_filter={"source": source},
                         )
                     )
@@ -476,7 +484,7 @@ def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[o
                 docs_with_scores = hybrid_retrieve(
                     question,
                     collection_name=collection_name,
-                    top_k=max(top_k, 6),
+                    top_k=max(candidate_pool, 12),
                 )
         except Exception:
             continue
@@ -485,11 +493,22 @@ def _retrieve_for_libraries(question: str, libraries: list[str]) -> list[tuple[o
             _enrich_doc_metadata(doc, library=library, score=score)
             retrieved.append((doc, score))
 
-    retrieved.sort(key=lambda item: item[1])
-    if len(libraries) <= 1:
-        return retrieved[:top_k]
+    if not retrieved:
+        return []
 
-    return retrieved[: max(top_k, min(len(retrieved), top_k * 3))]
+    # Sort by RRF score first to get the best candidates
+    retrieved.sort(key=lambda item: item[1])
+    
+    # Reranking
+    docs_to_rerank = [doc for doc, _ in retrieved]
+    reranker = get_reranker(model_name=reranker_model)
+    
+    # Note: Reranker.rerank returns a list of Document, we need to preserve scores or just return docs
+    # Since _retrieve_for_libraries is expected to return (doc, score), we'll do:
+    reranked_docs = reranker.rerank(question, docs_to_rerank, top_k=top_k)
+    
+    # Re-map to (doc, score). For now we'll just use dummy scores based on rank
+    return [(doc, float(i)) for i, doc in enumerate(reranked_docs)]
 
 
 def _group_source_entries(source_documents: list) -> list[dict]:
@@ -537,6 +556,8 @@ class Query(BaseModel):
     question: str
     knowledge_base: str | None = None
     query_scope: str = "active"
+    llm_model: str | None = None
+    reranker_model: str | None = None
 
 
 class IngestRequest(BaseModel):
@@ -586,6 +607,42 @@ def get_settings() -> dict:
         "documents_dir": str(active_dir),
         "documents_root_dir": str(documents_root_dir),
         "active_knowledge_base": active_knowledge_base,
+    }
+
+
+@app.get("/available-models")
+async def get_available_models():
+    """Fetch available models from Ollama and return supported Rerankers."""
+    ollama_models = []
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{SETTINGS.ollama_base_url}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                ollama_models = [m["name"] for m in data.get("models", [])]
+    except Exception:
+        # Fallback to current configured model if Ollama is unreachable
+        ollama_models = [runtime_settings["llm_model"]]
+
+    # Embedding models (often same as LLMs in Ollama, plus specific HF ones)
+    embeddings = ollama_models + [
+        "BAAI/bge-small-en",
+        "BAAI/bge-large-en-v1.5",
+        "mxbai-embed-large:latest"
+    ]
+
+    # Supported Rerankers (fixed list since these are usually HF cross-encoders)
+    rerankers = [
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "cross-encoder/ms-marco-ce-MiniLM-L-6-v2",
+        "BAAI/bge-reranker-base",
+        "BAAI/bge-reranker-large"
+    ]
+
+    return {
+        "llms": sorted(list(set(ollama_models))),
+        "embeddings": sorted(list(set(embeddings))),
+        "rerankers": rerankers
     }
 
 
@@ -1027,7 +1084,11 @@ def ask(query: Query) -> dict:
     debug_flags["matched_sources"] = sorted(set(matched_sources_for_abstention))
 
     try:
-        docs_with_scores = _retrieve_for_libraries(query.question, target_libraries)
+        docs_with_scores = _retrieve_for_libraries(
+            query.question, 
+            target_libraries, 
+            reranker_model=query.reranker_model
+        )
         source_documents = [doc for doc, _score in docs_with_scores]
         debug_flags["retrieved_count"] = len(source_documents)
         if docs_with_scores:
@@ -1066,7 +1127,7 @@ def ask(query: Query) -> dict:
             generate_fallback_answer_from_docs,
             query.question,
             source_documents,
-            llm_model=runtime_settings["llm_model"],
+            llm_model=query.llm_model or runtime_settings["llm_model"],
             llm_temperature=runtime_settings["llm_temperature"],
             ollama_num_ctx=runtime_settings["ollama_num_ctx"],
             ollama_num_predict=runtime_settings["ollama_num_predict"],
@@ -1098,7 +1159,7 @@ def ask(query: Query) -> dict:
             answer = generate_fallback_answer_from_docs(
                 query.question,
                 source_documents,
-                llm_model=runtime_settings["llm_model"],
+                llm_model=query.llm_model or runtime_settings["llm_model"],
                 llm_temperature=runtime_settings["llm_temperature"],
                 ollama_num_ctx=max(runtime_settings["ollama_num_ctx"], 8192),
                 ollama_num_predict=max(runtime_settings["ollama_num_predict"], 1024),
@@ -1117,7 +1178,7 @@ def ask(query: Query) -> dict:
             answer = generate_fallback_answer_from_docs(
                 query.question,
                 source_documents,
-                llm_model=runtime_settings["llm_model"],
+                llm_model=query.llm_model or runtime_settings["llm_model"],
                 llm_temperature=runtime_settings["llm_temperature"],
                 ollama_num_ctx=max(runtime_settings["ollama_num_ctx"], 8192),
                 ollama_num_predict=max(runtime_settings["ollama_num_predict"], 1024),

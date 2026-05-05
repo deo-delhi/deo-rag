@@ -38,6 +38,9 @@ class Settings:
     ollama_request_timeout_seconds: int
     ollama_keep_alive: str
     ask_timeout_seconds: int
+    enable_multi_vector: bool
+    reranker_model: str
+    enable_query_expansion: bool
     allowed_origins: tuple[str, ...]
     allowed_origin_regex: str | None
 
@@ -87,6 +90,9 @@ SETTINGS = Settings(
     # avoid model reload stalls during ingestion. Use "-1" for "never unload".
     ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "24h"),
     ask_timeout_seconds=int(os.getenv("ASK_TIMEOUT_SECONDS", "60")),
+    enable_multi_vector=os.getenv("ENABLE_MULTI_VECTOR", "True").lower() == "true",
+    reranker_model=os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+    enable_query_expansion=os.getenv("ENABLE_QUERY_EXPANSION", "True").lower() == "true",
     allowed_origins=_parse_allowed_origins(os.getenv("ALLOWED_ORIGINS", "")) or _DEFAULT_ALLOWED_ORIGINS,
     allowed_origin_regex=os.getenv("ALLOWED_ORIGIN_REGEX") or None,
 )

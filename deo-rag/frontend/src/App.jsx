@@ -90,6 +90,9 @@ export default function App() {
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareRecalibrating, setHardwareRecalibrating] = useState(false);
   const [hardwareUiMessage, setHardwareUiMessage] = useState('');
+  const [availableModels, setAvailableModels] = useState({ llms: [], embeddings: [], rerankers: [] });
+  const [selectedLlm, setSelectedLlm] = useState('');
+  const [selectedReranker, setSelectedReranker] = useState('');
 
   const canAsk = useMemo(() => question.trim().length > 0 && !loading, [question, loading]);
   const canUpload = useMemo(() => selectedFiles.length > 0 && !uploading, [selectedFiles, uploading]);
@@ -119,6 +122,11 @@ export default function App() {
       // Ignore
     }
   }, [queryScope]);
+
+  useEffect(() => {
+    // Load all data on component mount
+    refreshDashboard();
+  }, []);
 
   const withKnowledgeBase = (path, knowledgeBaseOverride = null) => {
     const kb = (knowledgeBaseOverride || activeKnowledgeBase)?.trim();
@@ -216,6 +224,18 @@ export default function App() {
       setHardwareUiMessage(err.message || 'Recalibrate failed.');
     } finally {
       setHardwareRecalibrating(false);
+    }
+  };
+
+  const refreshAvailableModels = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/available-models`);
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableModels(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch models', err);
     }
   };
 
@@ -636,6 +656,8 @@ export default function App() {
           question: question.trim(),
           knowledge_base: activeKnowledgeBase,
           query_scope: queryScope,
+          llm_model: selectedLlm || undefined,
+          reranker_model: selectedReranker || undefined,
         }),
       });
 
@@ -663,6 +685,7 @@ export default function App() {
     refreshHardware();
     refreshDocuments();
     fetchIngestStatus();
+    refreshAvailableModels();
   };
 
   return (
@@ -1028,6 +1051,22 @@ export default function App() {
 
           <div className="panel-grid two-up chat-layout">
             <form onSubmit={handleSubmit} className="stack-form">
+              <div className="settings-grid">
+                <div>
+                  <label htmlFor="llm-model">LLM Model</label>
+                  <select id="llm-model" value={selectedLlm} onChange={(e) => setSelectedLlm(e.target.value)}>
+                    <option value="">Default ({settings?.llm_model || 'loading...'})</option>
+                    {availableModels.llms.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="reranker-model">Reranker</label>
+                  <select id="reranker-model" value={selectedReranker} onChange={(e) => setSelectedReranker(e.target.value)}>
+                    <option value="">Default</option>
+                    {availableModels.rerankers.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              </div>
               <label htmlFor="question">Question</label>
               <textarea
                 id="question"

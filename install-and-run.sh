@@ -254,7 +254,17 @@ create_venv_and_install_backend() {
   fi
 
   "$VENV_PY" -m pip install --upgrade pip wheel setuptools
-  "$VENV_PY" -m pip install -r "$APP_ROOT/backend/requirements.txt"
+  
+  log python "Installing core backend dependencies ..."
+  # Try to install everything from requirements.txt
+  if ! "$VENV_PY" -m pip install -r "$APP_ROOT/backend/requirements.txt"; then
+    log python "Bulk install failed; trying robust fallback (ignoring paddle wheels if they fail) ..."
+    # Install one by one or at least retry without paddle if it's the culprit
+    # For now, just retry with --no-deps for the main list then try to fill in
+    "$VENV_PY" -m pip install -r "$APP_ROOT/backend/requirements.txt" --no-deps
+    "$VENV_PY" -m pip install -r "$APP_ROOT/backend/requirements.txt" || true
+  fi
+
   "$VENV_PY" -m pip install --upgrade "numpy<2.4"
 }
 
@@ -345,6 +355,10 @@ pull_models() {
   llm_model="${llm_model:-llama3.2:latest}"
   log ollama "Pulling chat model: $llm_model"
   ollama pull "$llm_model"
+
+  log ollama "Pulling additional models: gemma3:4b and qwen2.5:3b-instruct-q5_k_m"
+  ollama pull gemma3:4b
+  ollama pull qwen2.5:3b-instruct-q5_k_m
 
   local emb_provider emb_model
   emb_provider="$(env_get EMBEDDING_PROVIDER)"

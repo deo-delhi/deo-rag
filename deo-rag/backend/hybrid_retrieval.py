@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, text as sa_text
 
 from .config import SETTINGS
 from .rag_pipeline import retrieve_with_scores
-
+from .query_processor import expand_query, classify_query
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _RRF_K = 60.0
@@ -116,17 +116,26 @@ def hybrid_retrieve(
     metadata_filter: dict | None = None,
     candidate_pool: int | None = None,
 ) -> list[tuple[Document, float]]:
-    """Return up to ``top_k`` documents fused from BM25 and dense retrieval.
-
-    Score returned is ``-rrf_score`` so that callers which sort ascending
-    (smaller = better, matching PGVector's L2 distance convention) keep working
-    without changes.
-    """
+    """Return up to ``top_k`` documents fused from BM25 and dense retrieval."""
     pool = candidate_pool or max(top_k * 5, 20)
+    
+    # Query Expansion
+    expanded_queries = expand_query(query) if SETTINGS.enable_query_expansion else [query]
+    search_query = " ".join(expanded_queries)
+    
+    # Query Classification for Dynamic Weighting
+    q_type = classify_query(query)
+    if q_type == "keyword-heavy":
+        bm25_weight = 0.7
+        vector_weight = 0.3
+    else:
+        bm25_weight = 0.3
+        vector_weight = 0.7
 
     try:
+        # Search with search_query (expanded)
         vector_hits = retrieve_with_scores(
-            query,
+            search_query,
             top_k=pool,
             collection_name=collection_name,
             metadata_filter=metadata_filter,
@@ -137,7 +146,7 @@ def hybrid_retrieve(
     bm25, all_chunks = _get_bm25(collection_name)
     bm25_hits: list[tuple[Document, float]] = []
     if bm25 is not None and all_chunks:
-        scores = bm25.get_scores(_tokenize(query))
+        scores = bm25.get_scores(_tokenize(search_query))
         ranked = sorted(range(len(all_chunks)), key=lambda i: scores[i], reverse=True)
         for idx in ranked[:pool]:
             doc = all_chunks[idx]
@@ -151,18 +160,19 @@ def hybrid_retrieve(
 
     fused: dict[str, dict] = {}
 
-    def _accumulate(hits: Iterable[tuple[Document, float]], origin: str) -> None:
+    def _accumulate(hits: Iterable[tuple[Document, float]], origin: str, weight: float) -> None:
         for rank, (doc, _score) in enumerate(hits):
             key = _doc_key(doc)
             entry = fused.setdefault(
                 key,
                 {"doc": doc, "rrf": 0.0, "origins": set()},
             )
-            entry["rrf"] += 1.0 / (_RRF_K + rank + 1)
+            # Apply dynamic weighting to RRF
+            entry["rrf"] += weight * (1.0 / (_RRF_K + rank + 1))
             entry["origins"].add(origin)
 
-    _accumulate(vector_hits, "vector")
-    _accumulate(bm25_hits, "bm25")
+    _accumulate(vector_hits, "vector", vector_weight)
+    _accumulate(bm25_hits, "bm25", bm25_weight)
 
     if not fused:
         return vector_hits[:top_k]
