@@ -98,22 +98,15 @@ This gives better coverage for structured PDFs while still supporting simpler or
 
 ### `backend/rag_pipeline.py`
 
-This file wires together:
+This file wires together the retrieval and inference components. The pipeline follows an advanced multi-stage flow designed for stability in complex legal summarization:
 
-- the embedding provider
-- the vector store
-- the custom `HybridRerankRetriever`
-- the local cross-encoder reranker
-- the LLM
-- the RetrievalQA chain
-
-The retrieval pipeline now follows an advanced multi-stage flow:
 1. **Query Processing**: Expansion with synonyms and classification (keyword vs semantic).
-2. **Hybrid Retrieval**: BM25 + Dense vector search with dynamic weighting based on query type.
-3. **Parent Context Expansion**: If a summary or keyword chunk matches, the full text representation is retrieved.
-4. **Reranking**: A local cross-encoder rescores the top candidates for maximum precision.
-
-The prompt is constrained so the model should answer only from the retrieved context.
+2. **Hybrid Retrieval**: BM25 + Dense vector search with dynamic weighting. Metadata filters are applied **pre-slice** to ensure high recall for document-specific queries.
+3. **Deduplication**: Uses **full content hashing** to ensure unique chunks are preserved even when document headers are identical.
+4. **Parent Context Expansion**: If a summary or keyword chunk matches, the full text representation is retrieved.
+5. **Reranking**: A local cross-encoder rescores the top 40 candidates for maximum precision.
+6. **Grounding**: The prompt is constrained for factual accuracy but includes "best effort" instructions for summary requests to prevent false abstentions.
+7. **Context Management**: Feeds up to **100 snippets** into the LLM to leverage the 16k context window for comprehensive answers.
 
 ### `backend/query_processor.py`
 
@@ -135,7 +128,8 @@ Reads configuration from `.env` and sets defaults for:
 - embedding provider and model
 - pgvector connection settings
 - ingestion chunk size and overlap
-- retriever top-k
+- retriever top-k (default: **40**)
+- ollama_num_ctx (default: **16384**)
 - timeouts
 
 ## Data Flow

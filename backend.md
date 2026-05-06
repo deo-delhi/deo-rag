@@ -22,16 +22,22 @@ We use a multi-layered approach to ensure maximum text extraction quality:
 
 ## RAG Pipeline
 
-### 1. Vector Storage
-- **Provider**: PostgreSQL with `pgvector` (via ChromaDB or direct pgvector integration).
-- **Collection Management**: Documents are grouped by "Data Library" subdirectories (e.g., `unflagged`, `proprietary`).
+### 1. Vector Storage & Retrieval
+- **Provider**: PostgreSQL with `pgvector`.
+- **Hybrid Retrieval**: Combines **BM25** (keyword matching) and **Dense Vectors** (semantic matching) using Reciprocal Rank Fusion (RRF). This ensures precise matching for case names/citations and broad conceptual coverage.
+- **Robust Deduplication**: Uses **full content hashing** (MD5) to distinguish between chunks in documents with highly similar structural headers.
+- **Metadata Filtering**: Dynamically applies filters *before* slicing the retrieval pool to ensure 100% recall for targeted document queries.
 
-### 2. Embedding & Inference
+### 2. Context & Expansion
+- **Multi-Vector Expansion**: If a summary or keyword-based chunk matches, the system automatically expands it to the full parent text to provide maximum context to the LLM.
+- **Large Context Utilization**: Configured to feed up to **100 snippets** (leveraging the 16k context window) to support comprehensive long-form summarization.
+
+### 3. Embedding & Inference
 - **Embeddings**: 
-  - *Default*: `mxbai-embed-large` via Ollama (High accuracy).
-  - *Low VRAM Optimized*: `BAAI/bge-small-en-v1.5` via HuggingFace (Saves ~600MB VRAM).
-- **LLM**: `llama3.2` via Ollama (Optimized for 3B parameter efficiency).
-- **Reranker**: `ms-marco-MiniLM-L-6-v2` (Cross-encoder) for refining top-k results.
+  - *Default*: `mxbai-embed-large` via Ollama.
+  - *Fallback*: `BAAI/bge-small-en` (HF).
+- **LLM**: `qwen2.5:3b-instruct-q5_k_m` via Ollama (Highly reliable for legal summarization).
+- **Reranker**: `ms-marco-MiniLM-L-6-v2` for final precision rescoring.
 
 ## Hardware Acceleration
 
