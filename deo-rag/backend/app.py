@@ -569,6 +569,7 @@ class Query(BaseModel):
     query_scope: str = "active"
     llm_model: str | None = None
     reranker_model: str | None = None
+    system_prompt: str | None = None
 
 
 class IngestRequest(BaseModel):
@@ -857,7 +858,7 @@ def hardware_recalibrate() -> dict:
 def list_documents(knowledge_base: str | None = FastAPIQuery(default=None)) -> dict:
     resolved_knowledge_base = _resolve_knowledge_base_name(knowledge_base)
     target_documents_dir = _knowledge_base_dir(resolved_knowledge_base, create=True)
-    files = sorted([f.name for f in target_documents_dir.glob("*.pdf")])
+    files = sorted([f.name for f in target_documents_dir.iterdir() if f.suffix.lower() == ".pdf"])
     return {
         "knowledge_base": resolved_knowledge_base,
         "count": len(files),
@@ -1147,6 +1148,7 @@ def ask(query: Query) -> dict:
             llm_temperature=runtime_settings["llm_temperature"],
             ollama_num_ctx=runtime_settings["ollama_num_ctx"],
             ollama_num_predict=runtime_settings["ollama_num_predict"],
+            system_prompt=query.system_prompt,
         )
         answer = future.result(timeout=SETTINGS.ask_timeout_seconds)
     except ReadTimeout as exc:
@@ -1179,6 +1181,7 @@ def ask(query: Query) -> dict:
                 llm_temperature=runtime_settings["llm_temperature"],
                 ollama_num_ctx=max(runtime_settings["ollama_num_ctx"], 8192),
                 ollama_num_predict=max(runtime_settings["ollama_num_predict"], 1024),
+                system_prompt=query.system_prompt,
             )
             debug_flags["used_fallback"] = True
             debug_flags["answer_length"] = len(answer)
@@ -1198,6 +1201,7 @@ def ask(query: Query) -> dict:
                 llm_temperature=runtime_settings["llm_temperature"],
                 ollama_num_ctx=max(runtime_settings["ollama_num_ctx"], 8192),
                 ollama_num_predict=max(runtime_settings["ollama_num_predict"], 1024),
+                system_prompt=query.system_prompt,
             )
             debug_flags["used_incomplete_detection"] = True
             debug_flags["answer_length"] = len(answer)

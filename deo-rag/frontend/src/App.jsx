@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
-import deoLogoUrl from './deo_logo.png';
+const INDIA_EMBLEM_URL = 'https://upload.wikimedia.org/wikipedia/commons/5/55/Emblem_of_India.svg';
 
 const DEFAULT_API_PORT = 5200;
 const LOCALHOST_API_URL = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/i;
@@ -67,7 +67,8 @@ export default function App() {
   const [ingestStatus, setIngestStatus] = useState(null);
   const [ingestError, setIngestError] = useState('');
   const [chunkSize, setChunkSize] = useState(1000);
-  const [chunkOverlap, setChunkOverlap] = useState(150);
+  const [chunkOverlap, setChunkOverlap] = useState(200);
+  const [systemPrompt, setSystemPrompt] = useState(`You are a precise Litigation and Administrative Assistant. Your sole purpose is to analyze the provided <documents> and answer the user's <query> with absolute factual accuracy. STRICT RULES:1. You must base your answer EXCLUSIVELY on the provided <documents>. Do not infer or guess.2. MISSING INFO: If the <documents> do not contain the complete answer, you must state: "The provided documents do not contain sufficient information to answer this query."3. CHRONOLOGY: You must pay strict attention to dates. Events must be understood in linear chronological order. 4. OUTCOMES: Always explicitly state the final judicial outcome, ruling, or current status exactly as written in the text.5. NO ASSUMPTIONS: Maintain strict legal distinctions (e.g., distinguishing between land ownership vs. building ownership).INPUT STRUCTURE:You will always receive the <documents> first, followed by the specific <query> at the very end. Always read the query last.RESPONSE FORMAT:You must structure your response using the following XML tags:<scratchpad>Step 1: Extract all dates from the documents and list them in chronological order.Step 2: Identify the final outcome or ruling mentioned at the very end of the document.Step 3: Draft a brief outline of the events based strictly on the timeline.</scratchpad><answer>Provide your final, concise answer to the <query> here, relying ONLY on the facts established in your scratchpad.</answer>`);
   const [replaceCollection, setReplaceCollection] = useState(false);
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') {
@@ -658,6 +659,7 @@ export default function App() {
           query_scope: queryScope,
           llm_model: selectedLlm || undefined,
           reranker_model: selectedReranker || undefined,
+          system_prompt: systemPrompt || undefined,
         }),
       });
 
@@ -689,15 +691,24 @@ export default function App() {
   };
 
   return (
+    <>
+    <div className="tricolor-strip" aria-hidden="true" />
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark" aria-hidden="true">
-            <img src={deoLogoUrl} alt="" className="brand-logo-img" width={52} height={52} decoding="async" />
+            <img
+              src={INDIA_EMBLEM_URL}
+              alt="Emblem of India"
+              className="brand-logo-img india-emblem-img"
+              width={50}
+              height={50}
+              decoding="async"
+            />
           </div>
           <div>
             <p className="brand-kicker">DEO RAG Console</p>
-            <h1>Defence estates workspace</h1>
+            <h1>Defence Estates Office</h1>
           </div>
         </div>
 
@@ -752,10 +763,10 @@ export default function App() {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Dashboard</p>
+            <p className="eyebrow">Defence Estates Office — AI Workspace</p>
             <h2>DEO RAG Assistant</h2>
             <p className="subtitle">
-              Upload Defence Estates documents, ingest them into Data Libraries, and answer questions from one library or all libraries.
+              Upload Defence Estates records, ingest into Data Libraries, and query across DEO document collections.
             </p>
           </div>
 
@@ -1067,6 +1078,14 @@ export default function App() {
                   </select>
                 </div>
               </div>
+              <label htmlFor="system-prompt">System Prompt</label>
+              <textarea
+                id="system-prompt"
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                placeholder="Enter system prompt instructions here..."
+                rows={10}
+              />
               <label htmlFor="question">Question</label>
               <textarea
                 id="question"
@@ -1369,5 +1388,6 @@ export default function App() {
         </footer>
       </div>
     </main>
+    </>
   );
 }

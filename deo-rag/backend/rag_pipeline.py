@@ -289,6 +289,7 @@ def generate_fallback_answer_from_docs(
     llm_temperature: float | None = None,
     ollama_num_ctx: int | None = None,
     ollama_num_predict: int | None = None,
+    system_prompt: str | None = None,
 ) -> str:
     """Generate a direct answer from already-retrieved docs when QA chain is overly strict."""
     if not docs:
@@ -310,13 +311,27 @@ def generate_fallback_answer_from_docs(
         )
 
     context = "\n\n".join(context_parts)
-    prompt = FALLBACK_ANSWER_PROMPT.format(context=context, question=question)
     
-    print(f"--- FALLBACK PROMPT ---")
-    print(prompt)
-    print(f"--- END FALLBACK PROMPT ---")
+    # sequence: [relevant chunks] + [system prompt] + [query]
+    if system_prompt:
+        # Construct a custom prompt that follows the requested sequence
+        final_prompt = f"""<documents>
+{context}
+</documents>
 
-    result = llm.invoke(prompt)
+{system_prompt}
+
+<query>
+{question}
+</query>"""
+    else:
+        final_prompt = FALLBACK_ANSWER_PROMPT.format(context=context, question=question)
+    
+    print(f"--- RAG PROMPT ---")
+    print(final_prompt)
+    print(f"--- END RAG PROMPT ---")
+
+    result = llm.invoke(final_prompt)
     content = getattr(result, "content", None)
     if isinstance(content, str):
         return content.strip()

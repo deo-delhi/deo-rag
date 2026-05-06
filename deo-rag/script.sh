@@ -172,7 +172,7 @@ main() {
     # Respect .env if present, else fallback
     local env_model
     env_model="$(grep "^LLM_MODEL=" "$ROOT_DIR/.env" | cut -d= -f2- || echo "")"
-    local model_to_pull="${env_model:-llama3.2:latest}"
+    local model_to_pull="${env_model:-qwen2.5:3b-instruct-q5_k_m}"
     echo "Pulling model ${model_to_pull} in Ollama (this may take a while if not cached)..."
     ollama pull "$model_to_pull" || true
   else

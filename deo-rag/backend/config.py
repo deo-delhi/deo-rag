@@ -68,11 +68,11 @@ SETTINGS = Settings(
     llm_provider=os.getenv("LLM_PROVIDER", "ollama").lower(),
     embedding_model=os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest"),
     embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama").lower(),
-    llm_model=os.getenv("LLM_MODEL", "llama3.2:latest"),
+    llm_model=os.getenv("LLM_MODEL", "qwen2.5:3b-instruct-q5_k_m"),
     ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     documents_dir=os.getenv("DOCUMENTS_DIR", "../documents"),
     ingest_chunk_size=int(os.getenv("INGEST_CHUNK_SIZE", "1000")),
-    ingest_chunk_overlap=int(os.getenv("INGEST_CHUNK_OVERLAP", "150")),
+    ingest_chunk_overlap=int(os.getenv("INGEST_CHUNK_OVERLAP", "200")),
     # Number of chunks embedded + inserted into pgvector per batch. Higher values
     # amortize HTTP/DB overhead and let GPU-backed embedders saturate the device.
     ingest_embed_batch_size=int(os.getenv("INGEST_EMBED_BATCH_SIZE", "32")),
