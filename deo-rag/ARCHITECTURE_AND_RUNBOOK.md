@@ -104,9 +104,9 @@ This file wires together the retrieval and inference components. The pipeline fo
 2. **Hybrid Retrieval**: BM25 + Dense vector search with dynamic weighting. Metadata filters are applied **pre-slice** to ensure high recall for document-specific queries.
 3. **Deduplication**: Uses **full content hashing** to ensure unique chunks are preserved even when document headers are identical.
 4. **Parent Context Expansion**: If a summary or keyword chunk matches, the full text representation is retrieved.
-5. **Reranking**: A local cross-encoder rescores the top 40 candidates for maximum precision.
+5. **Reranking**: A local cross-encoder rescores the top 20 candidates for maximum precision.
 6. **Grounding**: The prompt is constrained for factual accuracy but includes "best effort" instructions for summary requests to prevent false abstentions.
-7. **Context Management**: Feeds up to **100 snippets** into the LLM to leverage the 16k context window for comprehensive answers.
+7. **Context Management**: Feeds up to **100 snippets** into the LLM to leverage the 12k context window for comprehensive answers.
 
 ### `backend/query_processor.py`
 
@@ -128,8 +128,8 @@ Reads configuration from `.env` and sets defaults for:
 - embedding provider and model
 - pgvector connection settings
 - ingestion chunk size and overlap
-- retriever top-k (default: **40**)
-- ollama_num_ctx (default: **16384**)
+- retriever top-k (default: **20**)
+- ollama_num_ctx (default: **12288**)
 - timeouts
 
 ## Data Flow

@@ -61,7 +61,7 @@ When working on this repository, all agents must adhere to these strict rules:
 - **Pathing**: Ensure all file operations respect the `DOCUMENTS_DIR` and handle Data Library subdirectories (defaulting to `unflagged`).
 - **Retrieval Performance**: 
   - Always use **full content hashing** (MD5) for document deduplication and fusion keys to prevent data loss in legal documents with shared headers.
-  - Maintain `retriever_top_k` at **40** and ensure the LLM context (e.g., `generate_fallback_answer_from_docs`) supports at least **100 snippets** to handle long-form legal summarization.
+  - Maintain `retriever_top_k` at **20** and ensure the LLM context (e.g., `generate_fallback_answer_from_docs`) supports at least **100 snippets** to handle long-form legal summarization.
   - Metadata filtering must be applied **before** slicing the retrieval candidate pool to ensure high recall for document-specific queries.
 - **Documentation**: If any major changes are made to the backend architecture, ingestion pipeline, or hardware integration, update [./backend.md](./backend.md) to reflect the new state. This includes changes to OCR layers, chunking strategies, or model providers.
 

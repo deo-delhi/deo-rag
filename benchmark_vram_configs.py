@@ -94,7 +94,7 @@ def main():
     current_vars = {
         "EMBEDDING_PROVIDER": "ollama",
         "EMBEDDING_MODEL": "mxbai-embed-large:latest",
-        "LLM_MODEL": "llama3.2:latest",
+        "LLM_MODEL": "qwen2.5:3b-instruct-q5_k_m",
         "CHROMA_PERSIST_DIRECTORY": "/home/assassin/code/deo-rag/vectorstore/chroma_db"
     }
     
@@ -102,7 +102,7 @@ def main():
     rec_vars = {
         "EMBEDDING_PROVIDER": "huggingface",
         "EMBEDDING_MODEL": "BAAI/bge-small-en",
-        "LLM_MODEL": "llama3.2:latest",
+        "LLM_MODEL": "qwen2.5:3b-instruct-q5_k_m",
         "CHROMA_PERSIST_DIRECTORY": "/home/assassin/code/deo-rag/vectorstore/chroma_db"
     }
     

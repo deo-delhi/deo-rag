@@ -237,8 +237,8 @@ configure_env() {
   ensure_env_key EMBEDDING_MODEL mxbai-embed-large
   ensure_env_key INGEST_CHUNK_SIZE 1000
   ensure_env_key INGEST_CHUNK_OVERLAP 200
-  ensure_env_key INGEST_EMBED_BATCH_SIZE 32
-  ensure_env_key INGEST_MAX_WORKERS 0
+  ensure_env_key INGEST_EMBED_BATCH_SIZE 4
+  ensure_env_key INGEST_MAX_WORKERS 1
   ensure_env_key INGEST_HF_ENCODE_BATCH_SIZE 0
   ensure_env_key RETRIEVER_TOP_K 20
   ensure_env_key OLLAMA_KEEP_ALIVE 24h
@@ -352,7 +352,7 @@ pull_models() {
 
   local llm_model
   llm_model="$(env_get LLM_MODEL)"
-  llm_model="${llm_model:-llama3.2:latest}"
+  llm_model="${llm_model:-qwen2.5:3b-instruct-q5_k_m}"
   log ollama "Pulling chat model: $llm_model"
   ollama pull "$llm_model"
 
@@ -386,7 +386,7 @@ configure_running_app() {
   log app "Setting default runtime options and sample library ..."
   curl -fsS -X PUT "$BACKEND_BASE/settings" \
     -H "Content-Type: application/json" \
-    -d '{"llm_model":"'"$(env_get LLM_MODEL)"'","retriever_top_k":20,"ollama_num_predict":2048,"ollama_num_ctx":12288,"ingest_chunk_size":1000,"ingest_chunk_overlap":200}' >/dev/null || true
+    -d '{"llm_model":"'"$(env_get LLM_MODEL)"'","retriever_top_k":20,"ollama_num_predict":3072,"ollama_num_ctx":12288,"ingest_chunk_size":1000,"ingest_chunk_overlap":200}' >/dev/null || true
 
   curl -fsS -X POST "$BACKEND_BASE/knowledge-bases" \
     -H "Content-Type: application/json" \

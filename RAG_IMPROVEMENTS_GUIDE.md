@@ -6,10 +6,10 @@
 - **EMBEDDING_PROVIDER**: Changed from `huggingface` (small model) to `ollama` with `mxbai-embed-large` for better semantic understanding of legal text
 - **INGEST_CHUNK_SIZE**: Reduced from 1000 to 800 for better chunk boundaries
 - **INGEST_CHUNK_OVERLAP**: Increased from 150 to 250 to preserve context continuity in legal documents
-- **RETRIEVER_TOP_K**: Increased from 4 to 10 to retrieve more chunks for comprehensive summaries
+- **RETRIEVER_TOP_K**: Increased to 20 to retrieve more chunks for comprehensive summaries
 - **LLM_TEMPERATURE**: Changed from 0 to 0.1 to allow slight synthesis across chunks while staying grounded
-- **OLLAMA_NUM_CTX**: Increased from 4096 to 8192 for longer legal cases
-- **OLLAMA_NUM_PREDICT**: Increased from 512 to 2048 for comprehensive summaries
+- **OLLAMA_NUM_CTX**: Increased to 12288 for longer legal cases
+- **OLLAMA_NUM_PREDICT**: Increased to 3072 for comprehensive summaries
 
 ### 2. **Prompt Engineering Improvements**
 

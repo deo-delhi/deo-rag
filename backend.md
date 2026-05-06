@@ -30,7 +30,7 @@ We use a multi-layered approach to ensure maximum text extraction quality:
 
 ### 2. Context & Expansion
 - **Multi-Vector Expansion**: If a summary or keyword-based chunk matches, the system automatically expands it to the full parent text to provide maximum context to the LLM.
-- **Large Context Utilization**: Configured to feed up to **100 snippets** (leveraging the 16k context window) to support comprehensive long-form summarization.
+- **Large Context Utilization**: Configured to feed up to **100 snippets** (leveraging the 12k context window) to support comprehensive long-form summarization.
 
 ### 3. Embedding & Inference
 - **Embeddings**: 

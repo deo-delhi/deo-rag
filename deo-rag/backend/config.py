@@ -75,21 +75,21 @@ SETTINGS = Settings(
     ingest_chunk_overlap=int(os.getenv("INGEST_CHUNK_OVERLAP", "200")),
     # Number of chunks embedded + inserted into pgvector per batch. Higher values
     # amortize HTTP/DB overhead and let GPU-backed embedders saturate the device.
-    ingest_embed_batch_size=int(os.getenv("INGEST_EMBED_BATCH_SIZE", "32")),
+    ingest_embed_batch_size=int(os.getenv("INGEST_EMBED_BATCH_SIZE", "4")),
     # Number of PDFs whose chunks are embedded concurrently. 0 = autodetect (cpu_count).
     # Set to 1 to disable concurrency. Embedding is I/O- or GPU-bound, so a small
     # pool is usually enough; oversubscribing a single GPU hurts throughput.
-    ingest_max_workers=int(os.getenv("INGEST_MAX_WORKERS", "0")),
+    ingest_max_workers=int(os.getenv("INGEST_MAX_WORKERS", "1")),
     ingest_hf_encode_batch_size=int(os.getenv("INGEST_HF_ENCODE_BATCH_SIZE", "0")),
-    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "40")),
-    llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
-    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "16384")),
-    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "2048")),
-    ollama_request_timeout_seconds=int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "180")),
+    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "20")),
+    llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
+    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "12288")),
+    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "3072")),
+    ollama_request_timeout_seconds=int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "600")),
     # How long Ollama keeps a model resident in VRAM between requests. Long values
     # avoid model reload stalls during ingestion. Use "-1" for "never unload".
     ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "24h"),
-    ask_timeout_seconds=int(os.getenv("ASK_TIMEOUT_SECONDS", "60")),
+    ask_timeout_seconds=int(os.getenv("ASK_TIMEOUT_SECONDS", "600")),
     enable_multi_vector=os.getenv("ENABLE_MULTI_VECTOR", "True").lower() == "true",
     reranker_model=os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
     enable_query_expansion=os.getenv("ENABLE_QUERY_EXPANSION", "True").lower() == "true",

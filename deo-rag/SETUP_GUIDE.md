@@ -141,7 +141,7 @@ cp .env.example .env
 Open the new `.env` and fill in/adjust:
 
 - `LLM_PROVIDER` — `ollama` (default) or `openai`.
-- `LLM_MODEL` — the Ollama model tag, e.g. `llama3.2:latest` or `llama3.2:1b`
+- `LLM_MODEL` — the Ollama model tag, e.g. `qwen2.5:3b-instruct-q5_k_m` or `llama3.2:1b`
   for very small machines.
 - `EMBEDDING_PROVIDER` — `ollama`, `huggingface`, or `openai`.
 - `EMBEDDING_MODEL` — for Ollama use `mxbai-embed-large:latest` or
@@ -255,7 +255,7 @@ ollama list
 Then pull whatever you set in `.env`:
 
 ```powershell
-ollama pull llama3.2:latest
+ollama pull qwen2.5:3b-instruct-q5_k_m
 ollama pull mxbai-embed-large:latest   # only if EMBEDDING_PROVIDER=ollama
 ```
 

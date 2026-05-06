@@ -56,7 +56,7 @@ curl http://localhost:5200/health
 # Should return: {"status":"ok"}
 
 curl http://localhost:5200/settings | jq '.retriever_top_k, .embedding_model'
-# Should show: 10 and "mxbai-embed-large:latest"
+# Should show: 20 and "mxbai-embed-large:latest"
 ```
 
 #### Step 5: Clear vectorstore via API (1 min)
@@ -144,7 +144,7 @@ curl http://localhost:5200/health
 #### Check 2: Are new settings active?
 ```bash
 curl http://localhost:5200/settings | jq '.retriever_top_k'
-# ✅ 10 = Good
+# ✅ 20 = Good
 # ❌ 4 = Need to restart backend
 ```
 

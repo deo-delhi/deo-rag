@@ -70,7 +70,7 @@ if (-not (Test-Path (Join-Path $RootDir ".env"))) {
 
 # Pull the Ollama model automatically
 if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
-    $TargetModel = "llama3.2:latest"
+    $TargetModel = "qwen2.5:3b-instruct-q5_k_m"
     if (Test-Path (Join-Path $LogDir "runtime_settings.json")) {
         try {
             $settings = Get-Content (Join-Path $LogDir "runtime_settings.json") | ConvertFrom-Json

@@ -4,10 +4,10 @@
 
 ### ✅ Configuration (.env)
 - Embedding: `BAAI/bge-small-en` → `mxbai-embed-large:latest` (Ollama)
-- Retrieval: `4` → `10` chunks
-- Context: `4096` → `8192` tokens
-- Generation: `512` → `2048` tokens
-- Chunks: `1000` → `800` size, `150` → `250` overlap
+- Retrieval: `4` → `20` chunks
+- Context: `4096` → `12288` tokens
+- Generation: `512` → `3072` tokens
+- Chunks: `1000` size, `200` overlap
 - Temperature: `0` → `0.1`
 
 ### ✅ Prompts (rag_pipeline.py)

@@ -727,9 +727,9 @@ try {
     }
     Start-OllamaIfNeeded
 
-    Write-Host "`n[ollama] Pulling chat model llama3.2:latest ..."
-    & ollama pull llama3.2:latest
-    if ($LASTEXITCODE -ne 0) { throw "ollama pull llama3.2:latest failed." }
+    Write-Host "`n[ollama] Pulling chat model qwen2.5:3b-instruct-q5_k_m ..."
+    & ollama pull qwen2.5:3b-instruct-q5_k_m
+    if ($LASTEXITCODE -ne 0) { throw "ollama pull qwen2.5:3b-instruct-q5_k_m failed." }
 
     Write-Host "[ollama] Pulling embedding model mxbai-embed-large:latest ..."
     & ollama pull mxbai-embed-large:latest
@@ -846,12 +846,12 @@ ALLOWED_ORIGIN_REGEX=
         throw "Backend /health did not respond. Inspect $AppRoot\.run-logs\backend.log and re-run."
     }
 
-    Write-Host "`n[settings] Pushing UI defaults (llama3.2, top_k=4, num_predict=512) ..."
+    Write-Host "`n[settings] Pushing UI defaults (qwen2.5:3b-instruct-q5_k_m, top_k=20, num_predict=3072) ..."
     $settingsBody = @{
-        llm_model          = "llama3.2:latest"
-        retriever_top_k    = 4
-        ollama_num_predict = 512
-        ollama_num_ctx     = 4096
+        llm_model          = "qwen2.5:3b-instruct-q5_k_m"
+        retriever_top_k    = 20
+        ollama_num_predict = 3072
+        ollama_num_ctx     = 12288
     } | ConvertTo-Json
     try {
         Invoke-RestMethod -Method Put -Uri "$BackendBase/settings" -Body $settingsBody -ContentType "application/json" -TimeoutSec 60 | Out-Null
@@ -889,7 +889,7 @@ ALLOWED_ORIGIN_REGEX=
             knowledge_base     = $SampleLibrary
             replace_collection = $true
             chunk_size         = 1000
-            chunk_overlap      = 150
+            chunk_overlap      = 200
         } | ConvertTo-Json
         Invoke-RestMethod -Method Post -Uri "$BackendBase/ingest/start" -Body $ingestBody `
             -ContentType "application/json" -TimeoutSec 120 | Out-Null

@@ -28,10 +28,10 @@ When the actual PDF contained:
 
 | # | Issue | Severity | Impact |
 |---|-------|----------|--------|
-| 1 | Too few chunks retrieved (top_k=4) | CRITICAL | Incomplete case summaries |
+| 1 | Too few chunks retrieved (top_k=4) | CRITICAL | Incomplete case summaries (Now 20) |
 | 2 | Small embedding model (BAAI/bge-small-en) | CRITICAL | Poor semantic matching for legal terms |
-| 3 | Insufficient context window (4096) | HIGH | Cases get truncated mid-sentence |
-| 4 | Low max tokens (512) | HIGH | Answer generation stops abruptly |
+| 3 | Insufficient context window (4096) | HIGH | Cases get truncated mid-sentence (Now 12288) |
+| 4 | Low max tokens (512) | HIGH | Answer generation stops abruptly (Now 3072) |
 | 5 | Poor chunking boundaries (1000 size) | HIGH | Legal context split across chunks |
 | 6 | Generic prompts | MEDIUM | LLM doesn't know how to structure legal summaries |
 | 7 | Temperature=0 (too conservative) | MEDIUM | LLM won't synthesize across chunks |
@@ -55,23 +55,23 @@ When the actual PDF contained:
 #### Retrieval Quantity Increase
 ```diff
 - RETRIEVER_TOP_K=4
-+ RETRIEVER_TOP_K=10
++ RETRIEVER_TOP_K=20
 ```
 
-**Why**: 4 chunks is insufficient for a comprehensive legal summary. 10 chunks allows the LLM to see the complete case arc. (Hybrid retriever fetches 50 candidates internally, so top-k=10 doesn't risk missing anything.)
+**Why**: 4 chunks is insufficient for a comprehensive legal summary. 20 chunks allows the LLM to see the complete case arc. (Hybrid retriever fetches 100 candidates internally, so top-k=20 doesn't risk missing anything.)
 
 #### Context Window Expansion
 ```diff
 - OLLAMA_NUM_CTX=4096
-+ OLLAMA_NUM_CTX=8192
++ OLLAMA_NUM_CTX=12288
 ```
 
-**Why**: Legal cases often span multiple sections. 8192 tokens allows the model to see all 10 chunks plus the prompt without truncation.
+**Why**: Legal cases often span multiple sections. 12288 tokens allows the model to see all 20 chunks plus the prompt without truncation.
 
 #### Generation Token Increase
 ```diff
 - OLLAMA_NUM_PREDICT=512
-+ OLLAMA_NUM_PREDICT=2048
++ OLLAMA_NUM_PREDICT=3072
 ```
 
 **Why**: Legal summaries require 800-1200 tokens to be comprehensive. 2048 provides headroom and prevents premature truncation.

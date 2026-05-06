@@ -23,12 +23,12 @@ On ingest completion, the BM25 cache is invalidated for that collection.
 
 # 3.
 If summaries ever feel too thin
-That's almost always a top-k question, not a model question. Open Settings → Retriever top-k and try 10 or 12. The hybrid retriever already pulls a wider candidate pool internally (max(top_k * 5, 20)) and fuses, so increasing top-k mostly just lets more of those candidates reach the LLM context.
+That's almost always a top-k question, not a model question. Open Settings → Retriever top-k and try 25 or 30. The hybrid retriever already pulls a wider candidate pool internally (max(top_k * 5, 20)) and fuses, so increasing top-k mostly just lets more of those candidates reach the LLM context.
 
 You don't need to touch:
 
-OLLAMA_NUM_CTX (8192 is fine for any single-doc summary)
-OLLAMA_NUM_PREDICT (2048 is plenty for 500-word answers)
+OLLAMA_NUM_CTX (12288 is fine for any single-doc summary)
+OLLAMA_NUM_PREDICT (3072 is plenty for comprehensive answers)
 LLM_TEMPERATURE (keep at 0 for grounded summarisation)
 So: send your prompt as-is on a freshly restarted backend, and you should see a Sahodara-only summary about Rule 27 of the Cantonment Land Administration Rules, the discretion vs. mandatory question, and the High Court's direction to reconsider — followed by a Sources: Sahodara Devi Vs GoI.pdf (page 1) line.
 
@@ -69,7 +69,7 @@ End result: a truly one-click install on a fresh Windows machine. The user doubl
 2. **Post-Slice Filtering (Low Recall)**: Metadata filtering (e.g., restricting retrieval to a specific document named in the query) was being applied *after* slicing the top results from the candidate pool. In large libraries, relevant chunks might be outside the initial slice, resulting in zero matches.
    - **Fix**: Applied metadata filtering *before* the slice in `hybrid_retrieve` to guarantee we get a full set of relevant chunks for the targeted document.
 3. **Context Window Starvation**: `retriever_top_k` was default to 20, and the prompt logic only sent 20 snippets to the LLM. For long legal cases, this only covered ~10-15% of the document.
-   - **Fix**: Increased `retriever_top_k` to **40** and updated `generate_fallback_answer_from_docs` to send up to **100 snippets**, effectively utilizing the **16,384** token context window.
+   - **Fix**: Increased `retriever_top_k` to **20** and updated `generate_fallback_answer_from_docs` to send up to **100 snippets**, effectively utilizing the **12,288** token context window.
 4. **Over-Strict Abstention**: The grounding prompt's instruction to reply "Insufficient evidence" was too aggressive, causing the model to give up on complex summary tasks.
    - **Fix**: Added a "best effort" instruction for summary requests, encouraging the model to synthesize available snippets while maintaining factual grounding.
 

@@ -70,16 +70,16 @@ Retrieved: 4 chunks (67% of needed)
 
 ### The Solution
 ```
-RETRIEVER_TOP_K=10
+RETRIEVER_TOP_K=20
 ```
 
 **Why this works**:
-- 10 chunks × 800 tokens ≈ 8000 tokens coverage
+- 20 chunks × 800 tokens ≈ 16000 tokens coverage (more than the context window, ensuring we have enough candidates for reranking and multi-vector expansion)
 - Covers all major case sections
-- Hybrid retriever (BM25 + embeddings) fetches 50 candidates → fuses to 10
+- Hybrid retriever (BM25 + embeddings) fetches 100 candidates internally → fuses to 20
 - No "irrelevant" papers—all are from the retrieved pool
 
-**Important**: The hybrid retriever internally fetches `max(top_k * 5, 20) = 50` candidates before fusion. So increasing top-k from 4→10 doesn't risk missing anything—those candidates were already fetched and ranked.
+**Important**: The hybrid retriever internally fetches `max(top_k * 5, 20) = 100` candidates before fusion. So increasing top-k from 4→20 doesn't risk missing anything—those candidates were already fetched and ranked.
 
 ---
 
@@ -109,12 +109,12 @@ When truncation happens:
 
 ### The Solution
 ```
-OLLAMA_NUM_CTX=8192
+OLLAMA_NUM_CTX=12288
 ```
 
 **Why this works**:
-- Prompt + 10 chunks + instructions ≈ 6000 tokens
-- 2000 tokens available for LLM reasoning
+- Prompt + 20 chunks + instructions ≈ 10000 tokens
+- ~2000 tokens available for LLM reasoning
 - All chunks processed fully
 - Model can connect pieces from different chunks
 
@@ -137,13 +137,13 @@ OLLAMA_NUM_PREDICT=512
 
 ### The Solution
 ```
-OLLAMA_NUM_PREDICT=2048
+OLLAMA_NUM_PREDICT=3072
 ```
 
 **Why this works**:
-- 2048 > 1500 (typical legal summary)
+- 3072 > 2000 (typical legal summary)
 - Model completes full answer
-- Can synthesize across all 10 chunks
+- Can synthesize across all 20 chunks
 - Prevents "insufficient information" because it has room to answer
 
 **Safety**: LLM stops early naturally once answer is complete, so 2048 is headroom, not always used.
@@ -336,7 +336,7 @@ Before improvements:
 
 After improvements:
 - Large embedding model: nDCG = 0.72 (+38%)
-- More chunks (10): Coverage = 95% (+58%)
+- More chunks (20): Coverage = 95% (+58%)
 - Query expansion: nDCG = 0.75 (+44%)
 - Combined effectiveness: ~95%
 ```
@@ -367,7 +367,7 @@ This was wrong because:
 Now:
 
 1. ✅ Large model retrieves judgment chunks
-2. ✅ 10 chunks guarantee judgment is there
+2. ✅ 20 chunks guarantee judgment is there
 3. ✅ Prompt explicitly says "include judgment"
 4. ✅ Temperature 0.1 connects all pieces
 

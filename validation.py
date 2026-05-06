@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple
 
 # Configuration
 BASE_URL = "http://localhost:5200"
-TIMEOUT = 180
+TIMEOUT = 600
 
 # Test cases with expected content
 TEST_CASES = [
