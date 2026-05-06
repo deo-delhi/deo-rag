@@ -148,7 +148,7 @@ def get_llm(
     raise ValueError("Unsupported LLM_PROVIDER. Use 'openai' or 'ollama'.")
 
 
-def _expand_to_parent_context(docs: list[Document], collection_name: str) -> list[Document]:
+def expand_to_parent_context(docs: list[Document], collection_name: str) -> list[Document]:
     """Expands documents to their full representations if they are summaries/keywords."""
     expanded_docs = []
     seen_parent_ids = set()
@@ -206,7 +206,7 @@ class HybridRerankRetriever(BaseRetriever):
         
         # 2. Parent Context Expansion
         if SETTINGS.enable_multi_vector:
-            docs = _expand_to_parent_context(docs, self.collection_name)
+            docs = expand_to_parent_context(docs, self.collection_name)
             
         # 3. Reranking
         if self.rerank:
@@ -261,13 +261,14 @@ FALLBACK_ANSWER_PROMPT = PromptTemplate(
 Hard rules - follow exactly:
 1. Each snippet is labelled `[snippet N] source: <filename> | page: <P>`. Treat that filename as the document the snippet belongs to.
 2. If the user names or clearly refers to a specific document, use ONLY snippets whose `source` matches that document. Ignore all other snippets, even if they look similar.
-3. Never use prior knowledge of cases, parties, dates, statutes, citations, or rulings. Do not infer, paraphrase loosely, or "fill in" anything that is not literally written in the snippets you are using.
-4. Quote facts directly from the snippets. If two snippets disagree, state the disagreement and quote both.
-5. If the snippets do not contain enough evidence to answer the question, reply exactly:
+3. Never use prior knowledge of cases, parties, dates, statutes, citations, or rulings. Do not infer or "fill in" anything that is not literally written in the snippets you are using.
+4. For summary requests (e.g., "summarise", "give summary"), synthesize all the provided snippets from the matching document to provide a comprehensive and structured overview. Provide as much detail as possible from the evidence.
+5. Quote facts directly from the snippets. If two snippets disagree, state the disagreement and quote both.
+6. If the snippets do not contain enough evidence to answer the question at all, reply exactly:
    Insufficient evidence in the provided documents to answer this question.
-   Do not guess.
-6. End the answer with a `Sources:` line listing each cited document as `<filename> (page <P>)`. Only list documents you actually used.
-7. Plain text. No filler. No labels such as STRUCTURED, FACT/SHORT, DESCRIPTIVE, or Mode.
+   However, for summary requests, do your best to provide a summary based on the available snippets even if they are incomplete. Do not guess facts not present.
+7. End the answer with a `Sources:` line listing each cited document as `<filename> (page <P>)`. Only list documents you actually used.
+8. Plain text. No filler. No labels such as STRUCTURED, FACT/SHORT, DESCRIPTIVE, or Mode.
 
 <CONTEXT>
 {context}
@@ -300,7 +301,8 @@ def generate_fallback_answer_from_docs(
         ollama_num_predict=ollama_num_predict,
     )
     context_parts: list[str] = []
-    for i, doc in enumerate(docs[:6], start=1):
+    # Increase to 100 snippets to leverage larger context window
+    for i, doc in enumerate(docs[:100], start=1):
         source = doc.metadata.get("source", "unknown")
         page = doc.metadata.get("page", "N/A")
         context_parts.append(
@@ -309,6 +311,11 @@ def generate_fallback_answer_from_docs(
 
     context = "\n\n".join(context_parts)
     prompt = FALLBACK_ANSWER_PROMPT.format(context=context, question=question)
+    
+    print(f"--- FALLBACK PROMPT ---")
+    print(prompt)
+    print(f"--- END FALLBACK PROMPT ---")
+
     result = llm.invoke(prompt)
     content = getattr(result, "content", None)
     if isinstance(content, str):

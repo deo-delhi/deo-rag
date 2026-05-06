@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import threading
+import hashlib
 from typing import Iterable
 
 from langchain_core.documents import Document
@@ -104,8 +105,9 @@ def invalidate_all() -> None:
 
 def _doc_key(doc: Document) -> str:
     src = (doc.metadata or {}).get("source") or "unknown"
-    head = (doc.page_content or "")[:80]
-    return f"{src}::{head}"
+    # Use full content hash to ensure uniqueness even with identical headers
+    content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()
+    return f"{src}::{content_hash}"
 
 
 def hybrid_retrieve(
@@ -148,7 +150,9 @@ def hybrid_retrieve(
     if bm25 is not None and all_chunks:
         scores = bm25.get_scores(_tokenize(search_query))
         ranked = sorted(range(len(all_chunks)), key=lambda i: scores[i], reverse=True)
-        for idx in ranked[:pool]:
+        # Apply filter before slicing to ensure we get 'pool' results for the filtered set
+        count = 0
+        for idx in ranked:
             doc = all_chunks[idx]
             if metadata_filter:
                 meta = doc.metadata or {}
@@ -157,6 +161,9 @@ def hybrid_retrieve(
             if scores[idx] <= 0:
                 continue
             bm25_hits.append((doc, float(scores[idx])))
+            count += 1
+            if count >= pool:
+                break
 
     fused: dict[str, dict] = {}
 

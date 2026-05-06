@@ -2,10 +2,11 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from threading import Lock, Thread
-import re
 import uuid
 import shutil
 import json
+import hashlib
+import re
 
 from fastapi import FastAPI, File, HTTPException, Query as FastAPIQuery, UploadFile
 from fastapi.responses import FileResponse
@@ -458,9 +459,9 @@ def _retrieve_for_libraries(
     reranker_model: str | None = None
 ) -> list[tuple[object, float]]:
     from .hybrid_retrieval import hybrid_retrieve
-    from .rag_pipeline import get_reranker
+    from .rag_pipeline import get_reranker, expand_to_parent_context
 
-    retrieved: list[tuple[object, float]] = []
+    retrieved_docs: list[Document] = []
     top_k = runtime_settings["retriever_top_k"]
 
     for library in libraries:
@@ -468,47 +469,57 @@ def _retrieve_for_libraries(
         matched_sources = _matching_sources_for_question(question, library)
         try:
             # Fetch a larger candidate pool for reranking
-            candidate_pool = top_k * 3
+            candidate_pool = top_k * 4 # Increased pool
             if matched_sources:
-                docs_with_scores = []
+                docs_for_lib = []
                 for source in matched_sources:
-                    docs_with_scores.extend(
-                        hybrid_retrieve(
-                            question,
-                            collection_name=collection_name,
-                            top_k=max(candidate_pool, 12),
-                            metadata_filter={"source": source},
-                        )
+                    hits = hybrid_retrieve(
+                        question,
+                        collection_name=collection_name,
+                        top_k=max(candidate_pool, 12),
+                        metadata_filter={"source": source},
                     )
+                    docs_for_lib.extend([h[0] for h in hits])
             else:
-                docs_with_scores = hybrid_retrieve(
+                hits = hybrid_retrieve(
                     question,
                     collection_name=collection_name,
                     top_k=max(candidate_pool, 12),
                 )
+                docs_for_lib = [h[0] for h in hits]
+            
+            # Parent Context Expansion
+            if SETTINGS.enable_multi_vector:
+                docs_for_lib = expand_to_parent_context(docs_for_lib, collection_name)
+            
+            for doc in docs_for_lib:
+                _enrich_doc_metadata(doc, library=library)
+                retrieved_docs.append(doc)
+
         except Exception:
             continue
 
-        for doc, score in docs_with_scores:
-            _enrich_doc_metadata(doc, library=library, score=score)
-            retrieved.append((doc, score))
-
-    if not retrieved:
+    if not retrieved_docs:
         return []
 
-    # Sort by RRF score first to get the best candidates
-    retrieved.sort(key=lambda item: item[1])
-    
     # Reranking
-    docs_to_rerank = [doc for doc, _ in retrieved]
     reranker = get_reranker(model_name=reranker_model)
+    # Deduplicate retrieved docs by content to handle duplicate files
+    seen_content = set()
+    unique_retrieved_docs = []
+    for doc in retrieved_docs:
+        # Use full content hash to avoid false positives with similar headers
+        content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()
+        if content_hash not in seen_content:
+            unique_retrieved_docs.append(doc)
+            seen_content.add(content_hash)
+
+    # We want more documents to survive if top_k is small
+    rerank_limit = max(top_k * 2, 40) 
+    reranked_docs = reranker.rerank(question, unique_retrieved_docs, top_k=rerank_limit)
     
-    # Note: Reranker.rerank returns a list of Document, we need to preserve scores or just return docs
-    # Since _retrieve_for_libraries is expected to return (doc, score), we'll do:
-    reranked_docs = reranker.rerank(question, docs_to_rerank, top_k=top_k)
-    
-    # Re-map to (doc, score). For now we'll just use dummy scores based on rank
     return [(doc, float(i)) for i, doc in enumerate(reranked_docs)]
+
 
 
 def _group_source_entries(source_documents: list) -> list[dict]:
@@ -1091,6 +1102,11 @@ def ask(query: Query) -> dict:
         )
         source_documents = [doc for doc, _score in docs_with_scores]
         debug_flags["retrieved_count"] = len(source_documents)
+        
+        # Log retrieved sources
+        retrieved_sources = [f"{doc.metadata.get('source')} (p{doc.metadata.get('page')})" for doc in source_documents]
+        print(f"Retrieved {len(source_documents)} documents: {', '.join(retrieved_sources)}")
+
         if docs_with_scores:
             debug_flags["top_similarity_score"] = round(float(docs_with_scores[0][1]), 4)
 

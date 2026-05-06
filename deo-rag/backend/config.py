@@ -81,10 +81,10 @@ SETTINGS = Settings(
     # pool is usually enough; oversubscribing a single GPU hurts throughput.
     ingest_max_workers=int(os.getenv("INGEST_MAX_WORKERS", "0")),
     ingest_hf_encode_batch_size=int(os.getenv("INGEST_HF_ENCODE_BATCH_SIZE", "0")),
-    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "4")),
+    retriever_top_k=int(os.getenv("RETRIEVER_TOP_K", "40")),
     llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
-    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
-    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "512")),
+    ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "16384")),
+    ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "2048")),
     ollama_request_timeout_seconds=int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "180")),
     # How long Ollama keeps a model resident in VRAM between requests. Long values
     # avoid model reload stalls during ingestion. Use "-1" for "never unload".
